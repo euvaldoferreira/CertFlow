@@ -3,7 +3,23 @@
    declarada no manifest, e expõe tudo em window.CertFlow. */
 (function () {
   const CNPJ_INPUT_HINTS = /cnpj/i;
-  const SUBMIT_TEXT_HINTS = /consultar|emitir|pesquisar|buscar|gerar certid[aã]o|verificar/i;
+  /* Ordem de prioridade: tentamos achar um botão de emissão explícito antes
+     de aceitar um "Consultar" genérico, que em alguns desses portais serve
+     para checar a autenticidade de uma certidão já emitida, não para gerar
+     uma nova. */
+  const SUBMIT_TEXT_PRIORITY = [
+    /emitir\s*(a\s*)?(nova\s*)?certid[aã]o/i,
+    /gerar\s*(a\s*)?(nova\s*)?certid[aã]o/i,
+    /emitir\s*certificado/i,
+    /nova\s*consulta/i,
+    /consultar/i,
+    /pesquisar|buscar|verificar/i,
+  ];
+  const EMIT_STEP_TEXT_HINTS = /emitir\s*(a\s*)?(nova\s*)?certid[aã]o|gerar\s*(a\s*)?(nova\s*)?certid[aã]o|emitir\s*certificado/i;
+  /* Seções do tipo "consultar autenticidade de certidão emitida" (por número
+     de controle) existem nesses portais ao lado da emissão — descartamos
+     campos/botões que estejam dentro de um bloco assim marcado. */
+  const EXCLUDE_CONTEXT_HINTS = /autenticidade|n[uú]mero de controle|certid[aã]o j[aá] emitida|validar certid[aã]o|consultar certid[aã]o emitida/i;
   const CAPTCHA_HINTS = /recaptcha|hcaptcha|h-captcha|g-recaptcha|captcha/i;
   const RESULT_TEXT_HINTS = /certid[aã]o emitida|situa[cç][aã]o regular|regular perante|certificado de regularidade|v[aá]lida at[eé]|n[uú]mero da certid[aã]o|n[uú]mero do certificado/i;
   const DOWNLOAD_TEXT_HINTS = /baixar|salvar|download|imprimir|gerar pdf|visualizar certid[aã]o|visualizar certificado/i;
@@ -54,33 +70,77 @@
     element.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  /* Sobe no DOM até achar um limite semântico razoável (painel de aba,
+     card, section, fieldset, ou um bloco com título próprio) para poder
+     ler o "assunto" daquele pedaço da página e descartar campos que
+     pertençam a uma seção de "consultar autenticidade", não de emissão. */
+  function closestNamedSection(el) {
+    let node = el.parentElement;
+    let depth = 0;
+    while (node && depth < 8) {
+      if (node.matches?.('[role="tabpanel"], .tab-pane, .tab-content, .card, .panel, section, fieldset')) {
+        return node;
+      }
+      if (node.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > legend')) {
+        return node;
+      }
+      node = node.parentElement;
+      depth++;
+    }
+    return null;
+  }
+
+  function isInExcludedContext(el) {
+    const section = closestNamedSection(el);
+    if (!section) return false;
+    const text = textOf(section);
+    return EXCLUDE_CONTEXT_HINTS.test(text) && !EMIT_STEP_TEXT_HINTS.test(text);
+  }
+
   function findCnpjInputHeuristic() {
-    const inputs = Array.from(document.querySelectorAll('input')).filter(isVisible);
+    const inputs = Array.from(document.querySelectorAll('input'))
+      .filter(isVisible)
+      .filter((el) => !isInExcludedContext(el));
 
-    const byAttr = inputs.find((el) =>
-      [el.id, el.name, el.getAttribute('formcontrolname'), el.getAttribute('placeholder'), el.getAttribute('aria-label')]
-        .filter(Boolean)
-        .some((attr) => CNPJ_INPUT_HINTS.test(attr))
-    );
-    if (byAttr) return byAttr;
+    const rank = (el) => (/emitir/i.test(textOf(closestNamedSection(el) || document.body)) ? 0 : 1);
 
-    const labels = Array.from(document.querySelectorAll('label'));
+    const byAttr = inputs
+      .filter((el) =>
+        [el.id, el.name, el.getAttribute('formcontrolname'), el.getAttribute('placeholder'), el.getAttribute('aria-label')]
+          .filter(Boolean)
+          .some((attr) => CNPJ_INPUT_HINTS.test(attr))
+      )
+      .sort((a, b) => rank(a) - rank(b));
+    if (byAttr[0]) return byAttr[0];
+
+    const labels = Array.from(document.querySelectorAll('label')).filter((l) => !isInExcludedContext(l));
     const cnpjLabel = labels.find((l) => CNPJ_INPUT_HINTS.test(textOf(l)));
     if (cnpjLabel) {
       if (cnpjLabel.htmlFor) {
         const el = document.getElementById(cnpjLabel.htmlFor);
-        if (el && isVisible(el)) return el;
+        if (el && isVisible(el) && !isInExcludedContext(el)) return el;
       }
       const nearby = cnpjLabel.closest('div, fieldset, mat-form-field, .form-group')?.querySelector('input');
-      if (nearby && isVisible(nearby)) return nearby;
+      if (nearby && isVisible(nearby) && !isInExcludedContext(nearby)) return nearby;
     }
 
     return inputs.find((el) => el.maxLength === 14 || el.maxLength === 18) || null;
   }
 
-  function findButtonHeuristic(hintsRegex) {
-    const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn, a[role="button"]')).filter(isVisible);
-    return candidates.find((el) => hintsRegex.test(textOf(el)) && !el.disabled) || null;
+  /* `hints` pode ser um regex único ou uma lista de regex em ordem de
+     prioridade — a primeira que casar com algum botão visível vence. */
+  function findButtonHeuristic(hints) {
+    const patterns = Array.isArray(hints) ? hints : [hints];
+    const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn, a[role="button"]'))
+      .filter(isVisible)
+      .filter((el) => !el.disabled)
+      .filter((el) => !isInExcludedContext(el));
+
+    for (const pattern of patterns) {
+      const match = candidates.find((el) => pattern.test(textOf(el)));
+      if (match) return match;
+    }
+    return null;
   }
 
   function detectCaptcha() {
@@ -240,7 +300,7 @@
       await sleep(300);
 
       const submit = await waitFor(
-        () => resolveElement('submitButton', siteKey, selectorOverrides, () => findButtonHeuristic(SUBMIT_TEXT_HINTS)),
+        () => resolveElement('submitButton', siteKey, selectorOverrides, () => findButtonHeuristic(SUBMIT_TEXT_PRIORITY)),
         { timeout: 8000, interval: 300 }
       );
       if (!submit) {
@@ -274,6 +334,17 @@
 
       sendStatus(siteKey, 'result_ready');
       await sleep(500);
+
+      /* Alguns desses portais mostram a "situação" numa primeira consulta e
+         só geram o PDF da certidão depois de um clique explícito em
+         "Emitir certidão" — se esse botão existir, aciona-o antes de
+         procurar o link de download. */
+      const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
+      if (emitBtn && isVisible(emitBtn) && !emitBtn.disabled) {
+        sendStatus(siteKey, 'emitting');
+        emitBtn.click();
+        await waitFor(() => findDownloadTrigger(), { timeout: 20000, interval: 500 });
+      }
 
       const trigger = resolveElement('downloadTrigger', siteKey, selectorOverrides, findDownloadTrigger);
       if (!trigger) {

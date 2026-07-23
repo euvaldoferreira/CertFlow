@@ -153,6 +153,9 @@ async function handleCsStatus(msg, sender) {
       addLog(`${site.label}: resultado obtido.`);
       await setBadge('...', '#1f6f4a');
       break;
+    case 'emitting':
+      addLog(`${site.label}: emitindo certidão...`);
+      break;
     case 'downloaded':
       currentRun.index += 1;
       await advanceToNextJob();

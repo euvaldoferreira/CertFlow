@@ -41,10 +41,21 @@ o DOM renderizado ao vivo. Por isso o CertFlow tenta localizar os campos automat
 1. Abra a página do site (Receita Federal ou Caixa) numa aba.
 2. Abra as **Configurações** do CertFlow (link no rodapé do popup, ou `about:addons` → CertFlow →
    Preferências).
-3. Clique em "Selecionar na página" ao lado do campo desejado (CNPJ, botão de consultar, ou link/botão
-   de download) e clique no elemento correspondente na aba do site.
+3. Clique em "Selecionar na página" ao lado do campo desejado (CNPJ, botão de consultar, botão de
+   emitir, ou link/botão de download) e clique no elemento correspondente na aba do site.
 4. O seletor fica salvo permanentemente — a heurística automática só é usada quando não há seletor
    salvo para aquele campo.
+
+O portal da Receita Federal costuma ter, na mesma página, uma seção para **emitir** a certidão e outra,
+separada, para **consultar a autenticidade** de uma certidão já emitida (por número de controle). A
+extensão tenta identificar e ignorar essa segunda seção automaticamente ao procurar o campo de CNPJ e o
+botão de consultar, priorizando textos como "Emitir certidão". Se mesmo assim ela acabar usando a seção
+errada, ajuste os campos "Campo de CNPJ" e "Botão consultar" pela calibração manual acima.
+
+Alguns fluxos também separam "consultar situação" de "emitir o PDF" em dois cliques distintos. Se for o
+caso do site no seu acesso, use o campo opcional **"Botão emitir (se houver etapa separada)"** nas
+Configurações para apontar esse segundo botão — a extensão clicará nele automaticamente depois de obter
+o resultado da consulta, antes de procurar o link de download.
 
 ## Onde os arquivos são salvos
 

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>CertFlow — Configurações</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header>
+    <img src="../icons/icon.svg" alt="" width="28" height="28" />
+    <h1>CertFlow — Configurações</h1>
+  </header>
+
+  <p class="intro">
+    Os sites da Receita Federal e da Caixa mudam o layout de tempos em tempos, então o CertFlow tenta
+    localizar os campos automaticamente. Se em algum momento a extensão não conseguir achar o campo de
+    CNPJ, o botão de consulta ou o link de download, calibre manualmente aqui: abra o site em uma aba,
+    clique em "Selecionar na página" e clique no elemento correspondente naquela aba.
+  </p>
+
+  <section class="site-config" data-site="rfb">
+    <h2>Receita Federal — Certidão de Regularidade Fiscal</h2>
+    <div class="field-row" data-kind="cnpjInput">
+      <label>Campo de CNPJ</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="submitButton">
+      <label>Botão consultar</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="downloadTrigger">
+      <label>Link/botão de download</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <p class="tab-hint" data-site-hint="rfb">Nenhuma aba do site aberta no momento.</p>
+  </section>
+
+  <section class="site-config" data-site="caixa">
+    <h2>Caixa — Certificado de Regularidade do FGTS</h2>
+    <div class="field-row" data-kind="cnpjInput">
+      <label>Campo de CNPJ</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="submitButton">
+      <label>Botão consultar</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="downloadTrigger">
+      <label>Link/botão de download</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <p class="tab-hint" data-site-hint="caixa">Nenhuma aba do site aberta no momento.</p>
+  </section>
+
+  <section class="folder-config">
+    <h2>Pasta de destino</h2>
+    <p class="intro">Subpasta dentro da pasta de downloads do Firefox onde os PDFs serão salvos (organizados por CNPJ).</p>
+    <div class="field-row">
+      <label>Pasta</label>
+      <input type="text" id="download-folder" placeholder="CertFlow" />
+      <button id="save-folder-btn" type="button">Salvar</button>
+    </div>
+  </section>
+
+  <section class="history">
+    <h2>Histórico de certidões salvas</h2>
+    <table>
+      <thead>
+        <tr><th>Data</th><th>CNPJ</th><th>Site</th><th>Arquivo</th></tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+    <button id="clear-history-btn" type="button">Limpar histórico</button>
+  </section>
+
+  <script src="../lib/cnpj.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

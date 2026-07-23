@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>CertFlow</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <img src="../icons/icon.svg" alt="" width="22" height="22" />
+    <h1>CertFlow</h1>
+  </header>
+
+  <form id="run-form">
+    <label for="cnpj-input">CNPJ</label>
+    <input id="cnpj-input" name="cnpj" type="text" inputmode="numeric" placeholder="00.000.000/0000-00" autocomplete="off" />
+    <p id="cnpj-error" class="error" hidden></p>
+
+    <div class="actions">
+      <button type="submit" id="start-btn">Emitir certidões</button>
+      <button type="button" id="cancel-btn" hidden>Cancelar</button>
+    </div>
+  </form>
+
+  <section id="steps" aria-label="Progresso">
+    <div class="step" data-site="rfb">
+      <span class="dot"></span>
+      <span class="label">Receita Federal — Regularidade Fiscal</span>
+    </div>
+    <div class="step" data-site="caixa">
+      <span class="dot"></span>
+      <span class="label">Caixa — Regularidade FGTS (CRF)</span>
+    </div>
+  </section>
+
+  <section id="log-section">
+    <h2>Andamento</h2>
+    <ul id="log-list"></ul>
+  </section>
+
+  <footer>
+    <a href="#" id="open-options">Configurar seletores e histórico</a>
+  </footer>
+
+  <script src="../lib/cnpj.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

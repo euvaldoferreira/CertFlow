@@ -1,5 +1,8 @@
-/* Orquestra a execução: abre cada site em sequência, manda o content script
-   preencher o CNPJ, aguarda captcha/resultado e salva o PDF gerado.
+/* Orquestra a execução: abre uma aba para cada certidão selecionada — todas
+   de uma vez, em paralelo, sem uma esperar a outra terminar — manda o
+   content script preencher o CNPJ (quando o site permite automação sem
+   login), aguarda captcha/resultado e salva o PDF gerado (ou confirma envio
+   por e-mail, dependendo do site). Uma certidão falhar não afeta as outras.
    No Firefox, CNPJUtil vem de lib/cnpj.js carregado antes deste arquivo pelo
    manifest ("background.scripts"). No Chrome, este arquivo roda sozinho
    como service worker (MV3 só aceita um "service_worker"), então ele mesmo
@@ -13,19 +16,36 @@ const NOTIFICATION_ICON = IS_SERVICE_WORKER ? 'icons/chrome/icon-128.png' : 'ico
 const UNAVAILABLE_RETRY_DELAY_MS = 90 * 1000;
 const UNAVAILABLE_MAX_RETRIES = 3;
 
+/* mode "auto": a extensão preenche CNPJ e opera o site sozinha.
+   mode "manual": o site exige login (gov.br) — a extensão só abre a aba e
+   espera o usuário fazer o resto; conclui quando a aba é fechada. */
 const SITES = {
   rfb: {
     label: 'Receita Federal - Certidão de Regularidade Fiscal',
     fileTag: 'RFB-certidao-regularidade-fiscal',
     url: 'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj',
+    mode: 'auto',
   },
   caixa: {
     label: 'Caixa - Certificado de Regularidade do FGTS',
     fileTag: 'Caixa-CRF-FGTS',
     url: 'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf',
+    mode: 'auto',
+  },
+  cndt: {
+    label: 'TST - Certidão Negativa de Débitos Trabalhistas (CNDT)',
+    fileTag: 'CNDT-TST',
+    url: 'https://cndt-certidao.tst.jus.br/gerarCertidao.faces',
+    mode: 'auto',
+    delivery: 'email', // não gera arquivo pra baixar — o site manda por e-mail
+  },
+  simples: {
+    label: 'Simples Nacional - Certidão de Regularidade',
+    url: 'https://www8.receita.fazenda.gov.br/simplesnacional/controleAcesso/Autentica.aspx?id=16',
+    mode: 'manual', // exige login gov.br — a extensão não mexe nisso
   },
 };
-const RUN_ORDER = ['rfb', 'caixa'];
+const DEFAULT_SELECTED_SITES = ['rfb', 'caixa'];
 
 let currentRun = null;
 
@@ -49,7 +69,15 @@ async function setBadge(text, color) {
   if (color) await browser.action.setBadgeBackgroundColor({ color });
 }
 
-async function startRun(rawCnpj) {
+function findJobByTabId(tabId) {
+  if (!currentRun || tabId == null) return null;
+  for (const [siteKey, job] of Object.entries(currentRun.jobs)) {
+    if (job.tabId === tabId) return { siteKey, job };
+  }
+  return null;
+}
+
+async function startRun(rawCnpj, selectedSites) {
   const cnpj = CNPJUtil.onlyDigits(rawCnpj);
   if (!CNPJUtil.isValid(cnpj)) {
     return { ok: false, error: 'CNPJ inválido.' };
@@ -58,65 +86,98 @@ async function startRun(rawCnpj) {
     return { ok: false, error: 'Já existe uma execução em andamento.' };
   }
 
+  const sites = (Array.isArray(selectedSites) && selectedSites.length ? selectedSites : DEFAULT_SELECTED_SITES).filter(
+    (s) => SITES[s]
+  );
+  if (!sites.length) {
+    return { ok: false, error: 'Selecione ao menos uma certidão.' };
+  }
+
   currentRun = {
     runId: crypto.randomUUID(),
     cnpj,
-    order: RUN_ORDER.slice(),
-    index: 0,
-    tabId: null,
+    selectedSites: sites,
+    jobs: Object.fromEntries(sites.map((siteKey) => [siteKey, { tabId: null, status: 'pending', retryCount: 0 }])),
     status: 'running',
     log: [],
-    retryCount: 0,
-    siteResults: {},
     startedAt: Date.now(),
   };
-  await browser.storage.local.set({ lastCnpj: cnpj });
-  addLog(`Iniciando emissão para CNPJ ${CNPJUtil.format(cnpj)}.`);
+  await browser.storage.local.set({ lastCnpj: cnpj, selectedCertidoes: sites });
+  addLog(`Iniciando emissão para CNPJ ${CNPJUtil.format(cnpj)} — ${sites.map((s) => SITES[s].label).join(', ')}.`);
   await setBadge('...', '#1f6f4a');
-  await advanceToNextJob();
+
+  /* Abre todas as abas em paralelo — nenhuma espera a outra terminar. */
+  await Promise.all(sites.map((siteKey, i) => startJob(siteKey, i === 0)));
   return { ok: true };
 }
 
-async function advanceToNextJob() {
-  if (!currentRun || currentRun.status !== 'running') return;
+async function startJob(siteKey, makeActive) {
+  const site = SITES[siteKey];
+  const job = currentRun.jobs[siteKey];
+  job.status = 'running';
 
-  if (currentRun.index >= currentRun.order.length) {
-    const failedSites = Object.entries(currentRun.siteResults || {})
-      .filter(([, result]) => result === 'error')
-      .map(([siteKey]) => SITES[siteKey].label);
-
-    if (failedSites.length) {
-      currentRun.status = 'error';
-      addLog(`Concluído com falha em: ${failedSites.join(', ')}. As demais certidões foram salvas normalmente.`, 'error');
-      await setBadge('!', '#c0392b');
-      browser.notifications.create({
-        type: 'basic',
-        iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
-        title: 'CertFlow — concluído com falhas',
-        message: `Falhou: ${failedSites.join(', ')}. Confira o log no popup.`,
-      }).catch(() => {});
-    } else {
-      currentRun.status = 'done';
-      addLog('Todas as certidões foram processadas.', 'success');
-      await setBadge('OK', '#2f9e5c');
-      browser.notifications.create({
-        type: 'basic',
-        iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
-        title: 'CertFlow',
-        message: 'Certidões emitidas e salvas com sucesso.',
-      }).catch(() => {});
-    }
+  if (site.mode === 'manual') {
+    addLog(`${site.label}: essa certidão exige login — abrindo a aba para você concluir manualmente. Feche a aba quando terminar.`, 'warn');
+    const tab = await browser.tabs.create({ url: site.url, active: makeActive });
+    job.tabId = tab.id;
+    persistRun();
     return;
   }
 
-  const siteKey = currentRun.order[currentRun.index];
-  const site = SITES[siteKey];
-  currentRun.retryCount = 0;
   await checkAiSuggestion(siteKey);
   addLog(`Abrindo ${site.label}...`);
-  const tab = await browser.tabs.create({ url: site.url, active: true });
-  currentRun.tabId = tab.id;
-  currentRun.currentSite = siteKey;
+  const tab = await browser.tabs.create({ url: site.url, active: makeActive });
+  job.tabId = tab.id;
+  persistRun();
+}
+
+function succeedJob(siteKey) {
+  if (!currentRun || !currentRun.jobs[siteKey]) return;
+  currentRun.jobs[siteKey].status = 'success';
+  checkRunCompletion();
+}
+
+function failJob(siteKey, reasonMessage) {
+  if (!currentRun || !currentRun.jobs[siteKey]) return;
+  currentRun.jobs[siteKey].status = 'error';
+  addLog(`${SITES[siteKey].label}: ${reasonMessage}.`, 'error');
+  checkRunCompletion();
+}
+
+async function checkRunCompletion() {
+  if (!currentRun) return;
+  const jobs = Object.values(currentRun.jobs);
+  const allTerminal = jobs.every((j) => j.status === 'success' || j.status === 'error');
+  if (!allTerminal) {
+    persistRun();
+    return;
+  }
+
+  const failedSites = Object.entries(currentRun.jobs)
+    .filter(([, j]) => j.status === 'error')
+    .map(([siteKey]) => SITES[siteKey].label);
+
+  if (failedSites.length) {
+    currentRun.status = 'error';
+    addLog(`Concluído com falha em: ${failedSites.join(', ')}. As demais certidões foram processadas normalmente.`, 'error');
+    await setBadge('!', '#c0392b');
+    browser.notifications.create({
+      type: 'basic',
+      iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
+      title: 'CertFlow — concluído com falhas',
+      message: `Falhou: ${failedSites.join(', ')}. Confira o log no popup.`,
+    }).catch(() => {});
+  } else {
+    currentRun.status = 'done';
+    addLog('Todas as certidões foram processadas.', 'success');
+    await setBadge('OK', '#2f9e5c');
+    browser.notifications.create({
+      type: 'basic',
+      iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
+      title: 'CertFlow',
+      message: 'Certidões emitidas com sucesso.',
+    }).catch(() => {});
+  }
   persistRun();
 }
 
@@ -139,9 +200,14 @@ async function applyAiSuggestion(siteKey, record) {
   const { aiAutoApply } = await browser.storage.local.get('aiAutoApply');
   if (!aiAutoApply) return;
 
-  const { selectorOverrides = {}, aiAppliedOverrides = {} } = await browser.storage.local.get(['selectorOverrides', 'aiAppliedOverrides']);
+  const {
+    selectorOverrides = {},
+    aiAppliedOverrides = {},
+    extraStepOverrides = {},
+  } = await browser.storage.local.get(['selectorOverrides', 'aiAppliedOverrides', 'extraStepOverrides']);
   selectorOverrides[siteKey] = selectorOverrides[siteKey] || {};
   aiAppliedOverrides[siteKey] = aiAppliedOverrides[siteKey] || {};
+  extraStepOverrides[siteKey] = extraStepOverrides[siteKey] || {};
 
   let changed = false;
   for (const field of AI_FIELDS) {
@@ -152,7 +218,20 @@ async function applyAiSuggestion(siteKey, record) {
     changed = true;
     addLog(`${SITES[siteKey].label}: IA aplicou automaticamente um seletor para "${field}" (estava sem configuração).`, 'ai');
   }
-  if (changed) await browser.storage.local.set({ selectorOverrides, aiAppliedOverrides });
+
+  /* Passos extras vêm do modo de aprendizado (task mining) — coisas que a
+     extensão não tinha um campo fixo para representar, tipo um seletor de
+     UF ou uma caixa de "aceito os termos". Mesma regra: só entra sozinho
+     se aquele "role" ainda não tiver nenhum passo configurado. */
+  for (const step of record.extraSteps || []) {
+    if (!step || !step.role || extraStepOverrides[siteKey][step.role]) continue;
+    extraStepOverrides[siteKey][step.role] = { selector: step.selector, action: step.action, value: step.value };
+    aiAppliedOverrides[siteKey][step.role] = true;
+    changed = true;
+    addLog(`${SITES[siteKey].label}: IA aprendeu e aplicou um passo extra ("${step.role}") observado no modo de aprendizado.`, 'ai');
+  }
+
+  if (changed) await browser.storage.local.set({ selectorOverrides, aiAppliedOverrides, extraStepOverrides });
 }
 
 /* Busca a última sugestão já calculada pela API (rápido, sem chamar a IA de
@@ -264,24 +343,11 @@ async function sendLogToApi(events, source) {
   }
 }
 
-/* Um site falhar não deve travar o run inteiro — marca esse site como
-   'error' e segue para o próximo da fila, em vez de parar tudo. O usuário só
-   fica sem a certidão daquele site específico, não das duas. */
-async function failCurrentSiteAndAdvance(siteKey, reasonMessage) {
-  currentRun.siteResults = currentRun.siteResults || {};
-  currentRun.siteResults[siteKey] = 'error';
-  addLog(`${SITES[siteKey].label}: ${reasonMessage} — pulando para a próxima certidão.`, 'error');
-  currentRun.index += 1;
-  await advanceToNextJob();
-}
-
-function markSiteSuccess(siteKey) {
-  currentRun.siteResults = currentRun.siteResults || {};
-  currentRun.siteResults[siteKey] = 'success';
-}
-
 async function handleCsStatus(msg, sender) {
-  if (!currentRun || sender.tab?.id !== currentRun.tabId) return;
+  if (!currentRun) return;
+  const found = findJobByTabId(sender.tab?.id);
+  if (!found || found.siteKey !== msg.siteKey) return;
+  const { job } = found;
   const site = SITES[msg.siteKey];
 
   switch (msg.status) {
@@ -290,7 +356,6 @@ async function handleCsStatus(msg, sender) {
       break;
     case 'captcha':
       addLog(`${site.label}: captcha detectado — resolva-o na aba aberta para continuar.`, 'warn');
-      await setBadge('!', '#c0392b');
       browser.notifications.create({
         type: 'basic',
         iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
@@ -299,8 +364,7 @@ async function handleCsStatus(msg, sender) {
       }).catch(() => {});
       break;
     case 'result_ready':
-      addLog(`${site.label}: resultado obtido.`);
-      await setBadge('...', '#1f6f4a');
+      addLog(`${site.label}: resultado obtido${msg.detail ? ' — ' + msg.detail : ''}.`, msg.detail?.includes('Positiva') ? 'warn' : 'info');
       break;
     case 'ai_verdict': {
       const v = msg.detail || {};
@@ -322,30 +386,32 @@ async function handleCsStatus(msg, sender) {
       addLog(`${site.label}: emitindo certidão...`);
       break;
     case 'temporarily_unavailable': {
-      currentRun.retryCount = (currentRun.retryCount || 0) + 1;
-      if (currentRun.retryCount > UNAVAILABLE_MAX_RETRIES) {
-        await failCurrentSiteAndAdvance(msg.siteKey, `${msg.detail || 'serviço indisponível'} — desistindo após ${UNAVAILABLE_MAX_RETRIES} tentativas`);
+      job.retryCount = (job.retryCount || 0) + 1;
+      if (job.retryCount > UNAVAILABLE_MAX_RETRIES) {
+        failJob(msg.siteKey, `${msg.detail || 'serviço indisponível'} — desistindo após ${UNAVAILABLE_MAX_RETRIES} tentativas`);
         break;
       }
-      addLog(`${site.label}: ${msg.detail || 'serviço indisponível'} — nova tentativa (${currentRun.retryCount}/${UNAVAILABLE_MAX_RETRIES}) em ${Math.round(UNAVAILABLE_RETRY_DELAY_MS / 1000)}s.`, 'warn');
-      await setBadge('⏳', '#b7791f');
+      addLog(
+        `${site.label}: ${msg.detail || 'serviço indisponível'} — nova tentativa (${job.retryCount}/${UNAVAILABLE_MAX_RETRIES}) em ${Math.round(UNAVAILABLE_RETRY_DELAY_MS / 1000)}s.`,
+        'warn'
+      );
       persistRun();
-      await browser.alarms.create(`certflow-retry-${currentRun.runId}`, { when: Date.now() + UNAVAILABLE_RETRY_DELAY_MS });
+      await browser.alarms.create(`certflow-retry-${currentRun.runId}-${msg.siteKey}`, { when: Date.now() + UNAVAILABLE_RETRY_DELAY_MS });
       break;
     }
+    case 'emailed':
+      addLog(`${site.label}: certidão emitida e enviada por e-mail${msg.detail ? ' — ' + msg.detail : ''}. Confira a caixa de entrada (e o spam).`, 'success');
+      succeedJob(msg.siteKey);
+      break;
     case 'downloaded':
-      markSiteSuccess(msg.siteKey);
-      currentRun.index += 1;
-      await advanceToNextJob();
+      succeedJob(msg.siteKey);
       break;
     case 'manual_save_needed':
-      await attemptSaveAsPdf(currentRun.tabId, msg.siteKey);
-      markSiteSuccess(msg.siteKey);
-      currentRun.index += 1;
-      await advanceToNextJob();
+      await attemptSaveAsPdf(job.tabId, msg.siteKey);
+      succeedJob(msg.siteKey);
       break;
     case 'error':
-      await failCurrentSiteAndAdvance(msg.siteKey, msg.detail || 'erro desconhecido');
+      failJob(msg.siteKey, msg.detail || 'erro desconhecido');
       break;
     default:
       break;
@@ -357,13 +423,23 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     await hydrateRun();
     switch (msg.type) {
       case 'START_RUN': {
-        const result = await startRun(msg.cnpj);
+        const result = await startRun(msg.cnpj, msg.selectedSites);
         sendResponse(result);
         break;
       }
       case 'GET_RUN_STATE': {
-        const { history = [], lastCnpj = '' } = await browser.storage.local.get(['history', 'lastCnpj']);
-        sendResponse({ run: currentRun, history, lastCnpj });
+        const { history = [], lastCnpj = '', selectedCertidoes } = await browser.storage.local.get([
+          'history',
+          'lastCnpj',
+          'selectedCertidoes',
+        ]);
+        sendResponse({
+          run: currentRun,
+          history,
+          lastCnpj,
+          availableSites: Object.fromEntries(Object.entries(SITES).map(([k, v]) => [k, { label: v.label, mode: v.mode }])),
+          selectedCertidoes: selectedCertidoes && selectedCertidoes.length ? selectedCertidoes : DEFAULT_SELECTED_SITES,
+        });
         break;
       }
       case 'CANCEL_RUN': {
@@ -376,7 +452,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case 'CS_READY': {
-        if (currentRun && currentRun.status === 'running' && sender.tab?.id === currentRun.tabId && msg.siteKey === currentRun.currentSite) {
+        const found = currentRun && currentRun.status === 'running' ? findJobByTabId(sender.tab?.id) : null;
+        if (found && found.siteKey === msg.siteKey && found.job.status === 'running') {
           browser.tabs.sendMessage(sender.tab.id, { type: 'RUN_JOB', siteKey: msg.siteKey, cnpj: currentRun.cnpj }).catch(() => {});
         }
         sendResponse({ ok: true });
@@ -449,7 +526,8 @@ browser.contextMenus.onClicked?.addListener(async (info) => {
     }).catch(() => {});
     return;
   }
-  await startRun(digits);
+  const { selectedCertidoes } = await browser.storage.local.get('selectedCertidoes');
+  await startRun(digits, selectedCertidoes);
 });
 
 browser.runtime.onInstalled.addListener(() => {
@@ -463,9 +541,31 @@ browser.runtime.onInstalled.addListener(() => {
 browser.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith('certflow-retry-')) return;
   await hydrateRun();
-  if (!currentRun || currentRun.status !== 'running' || alarm.name !== `certflow-retry-${currentRun.runId}`) return;
-  const site = SITES[currentRun.currentSite];
-  addLog(`${site.label}: tentando novamente...`);
-  await setBadge('...', '#1f6f4a');
-  await browser.tabs.reload(currentRun.tabId).catch(() => {});
+  if (!currentRun || currentRun.status !== 'running') return;
+  for (const [siteKey, job] of Object.entries(currentRun.jobs)) {
+    if (alarm.name === `certflow-retry-${currentRun.runId}-${siteKey}` && job.status === 'running') {
+      addLog(`${SITES[siteKey].label}: tentando novamente...`);
+      await browser.tabs.reload(job.tabId).catch(() => {});
+    }
+  }
+});
+
+/* Sem isso, fechar a aba de uma certidão manual (Simples Nacional) nunca
+   seria percebido como "terminei"; e fechar a aba de uma certidão
+   automática no meio do processo deixaria aquele job preso em "running"
+   pra sempre, travando a conclusão do run. */
+browser.tabs.onRemoved.addListener((tabId) => {
+  if (!currentRun || currentRun.status !== 'running') return;
+  const found = findJobByTabId(tabId);
+  if (!found || found.job.status !== 'running') return;
+  const { siteKey, job } = found;
+
+  if (SITES[siteKey].mode === 'manual') {
+    job.status = 'success';
+    addLog(`${SITES[siteKey].label}: aba fechada — considerando concluído (confira se a certidão foi realmente emitida).`, 'success');
+  } else {
+    job.status = 'error';
+    addLog(`${SITES[siteKey].label}: aba foi fechada antes de terminar.`, 'error');
+  }
+  checkRunCompletion();
 });

@@ -2,10 +2,13 @@
   const SITE_PATTERNS = {
     rfb: 'https://servicos.receitafederal.gov.br/*',
     caixa: 'https://consulta-crf.caixa.gov.br/*',
+    cndt: 'https://cndt-certidao.tst.jus.br/*',
   };
   const SITE_LABELS = {
     rfb: 'Receita Federal',
     caixa: 'Caixa (FGTS)',
+    cndt: 'TST (CNDT)',
+    simples: 'Simples Nacional',
   };
   const DEFAULT_API_URL = 'https://api-certflow.ecolmea.com/api/logs';
 
@@ -230,6 +233,17 @@
     alert('Configuração salva.');
   });
 
+  async function loadTaskMiningConfig() {
+    const { taskMiningEnabled } = await browser.storage.local.get('taskMiningEnabled');
+    document.getElementById('task-mining-enabled').checked = !!taskMiningEnabled;
+  }
+
+  document.getElementById('save-task-mining-btn').addEventListener('click', async () => {
+    const taskMiningEnabled = document.getElementById('task-mining-enabled').checked;
+    await browser.storage.local.set({ taskMiningEnabled });
+    alert('Configuração salva.');
+  });
+
   async function applyAiField(siteKey, field, selector) {
     const { selectorOverrides = {}, aiAppliedOverrides = {} } = await browser.storage.local.get(['selectorOverrides', 'aiAppliedOverrides']);
     selectorOverrides[siteKey] = selectorOverrides[siteKey] || {};
@@ -239,9 +253,27 @@
     await browser.storage.local.set({ selectorOverrides, aiAppliedOverrides });
   }
 
+  async function applyAiExtraStep(siteKey, step) {
+    const { extraStepOverrides = {}, aiAppliedOverrides = {} } = await browser.storage.local.get(['extraStepOverrides', 'aiAppliedOverrides']);
+    extraStepOverrides[siteKey] = extraStepOverrides[siteKey] || {};
+    extraStepOverrides[siteKey][step.role] = { selector: step.selector, action: step.action, value: step.value };
+    aiAppliedOverrides[siteKey] = aiAppliedOverrides[siteKey] || {};
+    aiAppliedOverrides[siteKey][step.role] = true;
+    await browser.storage.local.set({ extraStepOverrides, aiAppliedOverrides });
+  }
+
+  function describeExtraStep(step) {
+    if (step.action === 'select') return `selecionar "${step.value}" em ${step.selector}`;
+    return `clicar em ${step.selector}`;
+  }
+
   async function renderAiSuggestions() {
-    const { aiSuggestions = {}, selectorOverrides = {} } = await browser.storage.local.get(['aiSuggestions', 'selectorOverrides']);
-    for (const siteKey of ['rfb', 'caixa']) {
+    const { aiSuggestions = {}, selectorOverrides = {}, extraStepOverrides = {} } = await browser.storage.local.get([
+      'aiSuggestions',
+      'selectorOverrides',
+      'extraStepOverrides',
+    ]);
+    for (const siteKey of ['rfb', 'caixa', 'cndt']) {
       const record = aiSuggestions[siteKey];
       const summaryEl = document.querySelector(`.ai-summary[data-ai-summary="${siteKey}"]`);
       const fieldsEl = document.querySelector(`.ai-fields[data-ai-fields="${siteKey}"]`);
@@ -283,6 +315,33 @@
 
         fieldsEl.appendChild(row);
       });
+
+      (record.extraSteps || []).forEach((step) => {
+        const row = document.createElement('div');
+        row.className = 'ai-field-row';
+
+        const name = document.createElement('span');
+        name.className = 'ai-field-name';
+        name.textContent = `${step.role} (aprendido)`;
+        row.appendChild(name);
+
+        const value = document.createElement('span');
+        value.className = 'ai-field-value';
+        value.textContent = describeExtraStep(step);
+        row.appendChild(value);
+
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'apply-field-btn';
+        const current = extraStepOverrides[siteKey]?.[step.role];
+        const alreadyApplied = current && current.selector === step.selector && current.value === step.value;
+        applyBtn.textContent = alreadyApplied ? 'Já aplicado' : 'Aplicar';
+        applyBtn.disabled = alreadyApplied;
+        applyBtn.addEventListener('click', () => applyAiExtraStep(siteKey, step));
+        row.appendChild(applyBtn);
+
+        fieldsEl.appendChild(row);
+      });
     }
   }
 
@@ -307,7 +366,7 @@
     if (changes.history) loadHistory();
     if (changes.debugLog) loadDebugLog();
     if (changes.apiStatus) renderApiStatus();
-    if (changes.aiSuggestions || changes.selectorOverrides) renderAiSuggestions();
+    if (changes.aiSuggestions || changes.selectorOverrides || changes.extraStepOverrides) renderAiSuggestions();
   });
 
   loadOverrides();
@@ -317,6 +376,7 @@
   loadDebugLog();
   loadApiConfig();
   loadAiConfig();
+  loadTaskMiningConfig();
   renderAiSuggestions();
   setInterval(refreshTabHints, 3000);
 })();

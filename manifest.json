@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CertFlow - Emissor de Certidões CNPJ",
-  "version": "1.3.0",
-  "description": "Automatiza a emissão da Certidão de Regularidade Fiscal (Receita Federal) e do Certificado de Regularidade do FGTS (Caixa) a partir de um CNPJ, salvando os PDFs automaticamente.",
+  "version": "1.5.0",
+  "description": "Automatiza a emissão de certidões (Receita Federal, Caixa/FGTS, CNDT/TST) a partir de um CNPJ, salvando os PDFs automaticamente.",
   "browser_specific_settings": {
     "gecko": {
       "id": "certflow@ebf.local",
@@ -23,6 +23,7 @@
   "host_permissions": [
     "https://servicos.receitafederal.gov.br/*",
     "https://consulta-crf.caixa.gov.br/*",
+    "https://cndt-certidao.tst.jus.br/*",
     "https://api-certflow.ecolmea.com/*"
   ],
   "action": {
@@ -47,13 +48,19 @@
   "content_scripts": [
     {
       "matches": ["https://servicos.receitafederal.gov.br/*"],
-      "js": ["lib/cnpj.js", "content/common.js", "content/rfb-certidoes.js"],
+      "js": ["lib/cnpj.js", "content/common.js", "content/rfb-certidoes.js", "content/task-mining.js"],
       "run_at": "document_idle",
       "all_frames": false
     },
     {
       "matches": ["https://consulta-crf.caixa.gov.br/*"],
-      "js": ["lib/cnpj.js", "content/common.js", "content/caixa-crf.js"],
+      "js": ["lib/cnpj.js", "content/common.js", "content/caixa-crf.js", "content/task-mining.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://cndt-certidao.tst.jus.br/*"],
+      "js": ["lib/cnpj.js", "content/common.js", "content/cndt-certidoes.js", "content/task-mining.js"],
       "run_at": "document_idle",
       "all_frames": false
     }

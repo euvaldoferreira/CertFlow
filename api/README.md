@@ -59,7 +59,7 @@ Todos (exceto `/health`) exigem `Authorization: Bearer <API_KEY>`.
 | GET    | `/api/logs`                 | Lista os lotes recebidos (metadados, sem `events`).      |
 | GET    | `/api/logs/:id`             | Detalha um lote (inclui `events` completo).              |
 | DELETE | `/api/logs/:id`             | Remove um lote.                                          |
-| POST   | `/api/analyze`              | `{ siteKey: "rfb"\|"caixa" }` — chama a IA agora e devolve a sugestão. |
+| POST   | `/api/analyze`              | `{ siteKey }` (ex.: `"rfb"`, `"caixa"`, `"cndt"`) — chama a IA agora e devolve a sugestão. |
 | GET    | `/api/suggestions/:siteKey` | Última sugestão já calculada para aquele site.            |
 
 Rate limit: 120 requisições/min por IP. Corpo máximo: 5 MB.
@@ -85,6 +85,19 @@ O resultado fica salvo em `data/suggestions/<siteKey>.json` e pode ser consultad
 via `GET /api/suggestions/:siteKey`, ou recalculado sob demanda via `POST /api/analyze`. A extensão
 (tela de Configurações → "Sugestões de seletor por IA") consome esses endpoints — ver
 [README.md](../README.md) principal para o comportamento no lado da extensão.
+
+### Task mining → `extraSteps`
+
+Quando o "modo de aprendizado" está ligado na extensão (ver README principal), os logs também trazem um
+evento `observed_page_context` (site + retrato dos elementos disponíveis, registrado assim que o modo é
+ativado naquela página, antes de qualquer clique) seguido de `observed_click` / `observed_select` /
+`observed_fill` conforme o usuário opera o site manualmente. `analyzeSite()` inclui essa sequência no prompt e o schema de resposta
+ganha um campo `extraSteps`: uma lista (máx. 5) de `{ role, selector, action, value }` para passos que
+não cabem nos quatro campos fixos (ex.: um `<select>` de UF). As mesmas duas camadas de defesa do
+parágrafo acima se aplicam: `role`/`action` vêm de um enum fechado no JSON Schema, e o servidor
+revalida que `selector` é um candidato real da página e que `value` (quando `action` é `"select"`) é
+uma das opções realmente presentes naquele `<select>` — nunca aceita um valor ou seletor que a IA
+tenha inventado.
 
 ## Operação
 

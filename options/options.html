@@ -76,6 +76,48 @@
     <p class="tab-hint" data-site-hint="caixa">Nenhuma aba do site aberta no momento.</p>
   </section>
 
+  <section class="site-config" data-site="cndt">
+    <h2>TST — Certidão Negativa de Débitos Trabalhistas (CNDT)</h2>
+    <div class="field-row" data-kind="cnpjInput">
+      <label>Campo de CNPJ</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="submitButton">
+      <label>Botão emitir/consultar</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="emitButton">
+      <label>Botão emitir (se houver etapa separada)</label>
+      <input type="text" class="selector-value" readonly placeholder="opcional — só se consultar e emitir forem passos diferentes" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="downloadTrigger">
+      <label>Link/botão de download</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática — se ausente, a extensão aceita o aviso de envio por e-mail" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <p class="tab-hint" data-site-hint="cndt">Nenhuma aba do site aberta no momento.</p>
+    <p class="tab-hint">
+      O CNDT normalmente gera o PDF na hora após o captcha, mas o site também pode enviar por e-mail em
+      vez de mostrar um link — nesse caso a extensão já reconhece o aviso de envio como sucesso, sem
+      precisar de configuração extra aqui.
+    </p>
+  </section>
+
+  <section class="site-config manual-mode" data-site="simples">
+    <h2>Simples Nacional — Certidão de Regularidade</h2>
+    <p class="tab-hint">
+      Essa certidão exige login com conta gov.br, então não dá para automatizar como as demais — a
+      extensão só abre a aba e espera você concluir manualmente. Não há seletores para calibrar aqui.
+    </p>
+  </section>
+
   <section class="folder-config">
     <h2>Pasta de destino</h2>
     <p class="intro">Subpasta dentro da pasta de downloads do Firefox onde os PDFs serão salvos (organizados por CNPJ).</p>
@@ -137,14 +179,40 @@
     <p id="api-status" class="tab-hint"></p>
   </section>
 
+  <section class="task-mining">
+    <h2>Modo de aprendizado (Task Mining)</h2>
+    <p class="intro">
+      Quando ativado, a extensão observa em segundo plano os cliques e seleções que <strong>você faz
+      manualmente</strong> nos sites da Receita/Caixa — nunca o que é digitado em campos de texto livre
+      (só que o campo foi preenchido, não o valor; o CNPJ nunca entra nisso). Serve para "ensinar" um
+      passo que a extensão ainda não conhece — por exemplo, um seletor de UF ou uma caixa de "aceito os
+      termos" — fazendo esse passo você mesmo uma vez, manualmente, com o modo ligado. A gravação só
+      roda quando é você operando o site; enquanto a extensão está executando um fluxo automatizado,
+      nada é observado.
+    </p>
+    <div class="field-row checkbox-row">
+      <label for="task-mining-enabled">Ativar modo de aprendizado</label>
+      <input type="checkbox" id="task-mining-enabled" />
+    </div>
+    <div class="actions-row">
+      <button id="save-task-mining-btn" type="button">Salvar</button>
+    </div>
+    <p class="tab-hint">
+      Os passos observados alimentam a mesma análise por IA da seção abaixo — depois de demonstrar o
+      passo manualmente, clique em "Verificar agora" no site correspondente (ou aguarde o próximo envio
+      automático de log) para a IA propor o novo passo.
+    </p>
+  </section>
+
   <section class="ai-suggestions">
     <h2>Sugestões de seletor por IA</h2>
     <p class="intro">
-      A <code>certflow-api</code> pode usar o Claude para ler o retrato da página (ids, textos de
-      botão, seletores — nunca o CNPJ nem o conteúdo da certidão) e sugerir qual seletor usar em cada
-      campo, escolhendo sempre entre os elementos que a extensão já viu de verdade na página. A IA
-      nunca gera nem executa código — só sugere um valor de configuração, do mesmo tipo que você
-      preenche manualmente em "Selecionar na página" acima.
+      A <code>certflow-api</code> pode usar o Gemini para ler o retrato da página (ids, textos de
+      botão, seletores — nunca o CNPJ nem o conteúdo da certidão) e, quando disponível, a sequência que
+      você demonstrou no modo de aprendizado acima, e sugerir qual seletor usar em cada campo —
+      escolhendo sempre entre os elementos que a extensão já viu de verdade na página. A IA nunca gera
+      nem executa código — só sugere valores de configuração, do mesmo tipo que você preenche
+      manualmente em "Selecionar na página" acima.
     </p>
     <div class="field-row checkbox-row">
       <label for="ai-auto-apply">Preencher automaticamente campos que estão sem configuração</label>
@@ -170,6 +238,13 @@
       <p class="ai-summary tab-hint" data-ai-summary="caixa"></p>
       <div class="ai-fields" data-ai-fields="caixa"></div>
       <button class="analyze-btn" type="button" data-site="caixa">Verificar agora (chama a IA)</button>
+    </div>
+
+    <div class="ai-site-block" data-site="cndt">
+      <h3>TST (CNDT)</h3>
+      <p class="ai-summary tab-hint" data-ai-summary="cndt"></p>
+      <div class="ai-fields" data-ai-fields="cndt"></div>
+      <button class="analyze-btn" type="button" data-site="cndt">Verificar agora (chama a IA)</button>
     </div>
   </section>
 

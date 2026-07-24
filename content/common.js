@@ -15,19 +15,48 @@
     /consultar/i,
     /pesquisar|buscar|verificar/i,
   ];
-  const EMIT_STEP_TEXT_HINTS = /emitir\s*(a\s*)?(nova\s*)?certid[aã]o|gerar\s*(a\s*)?(nova\s*)?certid[aã]o|emitir\s*certificado/i;
+  /* "Obter Certificado" é o texto real do botão nessa etapa no site da
+     Caixa — sem isso a extensão parava exatamente aí, sem completar o
+     fluxo. Também cobre variantes tipo "Confirmar emissão". */
+  const EMIT_STEP_TEXT_HINTS = /emitir\s*(a\s*)?(nova\s*)?certid[aã]o|gerar\s*(a\s*)?(nova\s*)?certid[aã]o|emitir\s*certificado|obter\s*(o\s*)?certificado|obter\s*(a\s*)?certid[aã]o|gerar\s*certificado|confirmar\s*(a\s*)?emiss[aã]o/i;
   /* Seções do tipo "consultar autenticidade de certidão emitida" (por número
      de controle) existem nesses portais ao lado da emissão — descartamos
      campos/botões que estejam dentro de um bloco assim marcado. */
   const EXCLUDE_CONTEXT_HINTS = /autenticidade|n[uú]mero de controle|certid[aã]o j[aá] emitida|validar certid[aã]o|consultar certid[aã]o emitida/i;
   const CAPTCHA_HINTS = /recaptcha|hcaptcha|h-captcha|g-recaptcha|captcha/i;
   const RESULT_TEXT_HINTS = /certid[aã]o emitida|situa[cç][aã]o regular|regular perante|certificado de regularidade|v[aá]lida at[eé]|n[uú]mero da certid[aã]o|n[uú]mero do certificado|certid[aã]o v[aá]lida encontrada|j[aá] existe uma certid[aã]o v[aá]lida/i;
+  /* A Receita Federal pode devolver três resultados diferentes para o
+     mesmo CNPJ — todos geram um PDF para baixar, mas o usuário precisa
+     saber qual saiu. Ordem de checagem importa: "positiva com efeitos de
+     negativa" também contém a palavra "positiva", então tem que ser
+     testada antes do padrão genérico de "positiva". */
+  const RESULT_POSITIVA_PENDENCIA_HINTS = /positiva\s+com\s+efeitos\s+de\s+negativa/i;
+  const RESULT_POSITIVA_HINTS = /certid[aã]o\s+positiva\s+de\s+d[eé]bitos|situa[cç][aã]o\s+irregular/i;
+  const RESULT_NEGATIVA_HINTS = /certid[aã]o\s+negativa\s+de\s+d[eé]bitos|nada\s+consta/i;
+  /* Estados em que o site definitivamente NÃO vai gerar uma certidão para
+     esse CNPJ agora (CNPJ inválido, empregador não cadastrado no FGTS,
+     dados insuficientes para certificação automática) — bem diferentes de
+     "indisponibilidade temporária": aqui não adianta tentar de novo, o
+     certo é reportar e passar para a próxima certidão da fila. */
+  const RESULT_BLOCKED_HINTS = /cnpj\s+inv[aá]lido|cnpj\s+n[aã]o\s+(consta|encontrado|cadastrado|localizado)|empregador\s+n[aã]o\s+(est[aá]\s+)?cadastrado|n[aã]o\s+foi\s+poss[ií]vel\s+(emitir|processar|confirmar)|informa[cç][oõ]es\s+dispon[ií]veis\s+n[aã]o\s+s[aã]o\s+suficientes|imped(e|imento)s?\s+(a|à)\s+certifica[cç][aã]o|n[aã]o\s+[eé]\s+poss[ií]vel\s+emitir/i;
+  const RESULT_CLASSIFICATION_LABEL = {
+    negativa: 'Certidão Negativa (regular, sem pendências)',
+    positiva_com_pendencia: 'Certidão Positiva com Efeitos de Negativa (há pendências, mas suspensas)',
+    positiva: 'Certidão Positiva (débitos ativos) ou situação irregular',
+    regular: 'Situação regular',
+  };
   /* Mensagem observada na prática: "O serviço de emissão de certidão está
      temporariamente indisponível. Tente novamente em alguns minutos." —
      não é captcha nem resultado, é uma falha transitória do próprio site
      que vale a pena tentar de novo automaticamente em vez de desistir. */
   const TEMP_UNAVAILABLE_HINTS = /temporariamente indispon[ií]vel|servi[cç]o.{0,30}indispon[ií]vel|indispon[ií]vel.{0,30}moment|tente novamente (mais tarde|em alguns minutos)|sistema (est[aá] )?fora do ar|erro (interno|inesperado) do servidor|falha ao processar/i;
   const DOWNLOAD_TEXT_HINTS = /baixar|salvar|download|imprimir|gerar pdf|visualizar certid[aã]o|visualizar certificado/i;
+  /* O CNDT (TST) não mostra um PDF na própria página — ele confirma no
+     texto que já mandou por e-mail ("Certidão EMITIDA e ENVIADA por e-mail
+     com sucesso"). Precisa ser verificado ANTES de RESULT_TEXT_HINTS
+     genérico, porque essa frase também contém "certidão emitida" e cairia
+     no caminho normal de "procurar botão de baixar", que aqui não existe. */
+  const EMAIL_SENT_HINTS = /emitida\s+e\s+enviada\s+por\s+e-?mail|enviad[ao]\s+por\s+e-?mail\s+com\s+sucesso|certid[aã]o\s+ser[aá]\s+enviada\s+por\s+e-?mail/i;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -136,7 +165,13 @@
      prioridade — a primeira que casar com algum botão visível vence. */
   function findButtonHeuristic(hints) {
     const patterns = Array.isArray(hints) ? hints : [hints];
-    const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn, a[role="button"]'))
+    /* input[type="button"] entra aqui de propósito: é assim que o JSF da
+       Caixa renderiza os botões ("Consultar", provavelmente "Obter
+       Certificado" também) — sem isso a extensão nunca via esses botões,
+       porque não é <button> nem input[type="submit"]. */
+    const candidates = Array.from(
+      document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn, a[role="button"]')
+    )
       .filter(isVisible)
       .filter((el) => !el.disabled)
       .filter((el) => !isInExcludedContext(el));
@@ -164,12 +199,33 @@
 
   function detectResult() {
     const bodyText = document.body.innerText || '';
-    return RESULT_TEXT_HINTS.test(bodyText);
+    return RESULT_TEXT_HINTS.test(bodyText) || RESULT_BLOCKED_HINTS.test(bodyText);
   }
 
   function detectTemporarilyUnavailable() {
     const bodyText = document.body.innerText || '';
     return TEMP_UNAVAILABLE_HINTS.test(bodyText);
+  }
+
+  function detectEmailSent() {
+    const bodyText = document.body.innerText || '';
+    return EMAIL_SENT_HINTS.test(bodyText);
+  }
+
+  /* Diz qual dos resultados possíveis apareceu — usado só para logar de
+     forma legível e para decidir se vale a pena procurar botão de
+     emitir/baixar (num estado "bloqueado" não existe PDF nenhum, então
+     nem tenta). Não muda o fato de que qualquer uma das três certidões
+     "normais" (negativa, positiva, positiva com efeitos de negativa)
+     segue o mesmo caminho de download. */
+  function classifyResultText() {
+    const text = document.body.innerText || '';
+    if (RESULT_BLOCKED_HINTS.test(text)) return 'bloqueado';
+    if (RESULT_POSITIVA_PENDENCIA_HINTS.test(text)) return 'positiva_com_pendencia';
+    if (RESULT_POSITIVA_HINTS.test(text)) return 'positiva';
+    if (RESULT_NEGATIVA_HINTS.test(text)) return 'negativa';
+    if (RESULT_TEXT_HINTS.test(text)) return 'regular';
+    return 'desconhecido';
   }
 
   function extractMatchSnippet(regex, maxLen = 220) {
@@ -237,7 +293,7 @@
         selector: elementToSelector(el),
       }));
 
-    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn, a[role="button"], a'))
+    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn, a[role="button"], a'))
       .filter(isVisible)
       .filter((el) => {
         const t = textOf(el);
@@ -252,7 +308,26 @@
         selector: elementToSelector(el),
       }));
 
-    return { title: document.title, url: location.href, inputs, buttons };
+    /* Categórico/estrutural (lista fechada de opções, tipo UF), não um
+       valor livre digitado — por isso é seguro incluir qual opção estava
+       selecionada, diferente do que fazemos com <input> de texto. */
+    const selects = Array.from(document.querySelectorAll('select'))
+      .filter(isVisible)
+      .slice(0, 15)
+      .map((el) => ({
+        tag: 'select',
+        id: el.id || null,
+        name: el.name || null,
+        formcontrolname: el.getAttribute('formcontrolname'),
+        ariaLabel: el.getAttribute('aria-label'),
+        options: Array.from(el.options || [])
+          .slice(0, 60)
+          .map((o) => ({ value: o.value, text: textOf(o) })),
+        excludedContext: isInExcludedContext(el),
+        selector: elementToSelector(el),
+      }));
+
+    return { title: document.title, url: location.href, inputs, buttons, selects };
   }
 
   function recordDebug(siteKey, step, detail, snapshot) {
@@ -347,6 +422,34 @@
     browser.runtime.sendMessage({ type: 'CS_STATUS', siteKey, status, detail }).catch(() => {});
   }
 
+  /* Executa os passos extras aprendidos pelo modo de aprendizado (task
+     mining) ou calibrados manualmente — coisas que não têm um campo fixo
+     próprio, tipo selecionar uma UF ou marcar "aceito os termos". Roda
+     depois de preencher o CNPJ e antes de clicar em consultar. Se algum
+     elemento configurado sumiu da página, só pula esse passo e loga —
+     nunca trava o fluxo por causa disso. */
+  async function runExtraSteps(siteKey) {
+    const { extraStepOverrides = {} } = await browser.storage.local.get('extraStepOverrides');
+    const steps = extraStepOverrides[siteKey];
+    if (!steps) return;
+
+    for (const [role, step] of Object.entries(steps)) {
+      const el = step?.selector ? document.querySelector(step.selector) : null;
+      if (!el || !isVisible(el)) {
+        recordDebug(siteKey, 'extra_step_skipped', `"${role}" — elemento não encontrado na página (${step?.selector}).`);
+        continue;
+      }
+      if (step.action === 'select' && step.value != null) {
+        setNativeValue(el, step.value);
+        recordDebug(siteKey, 'extra_step_done', `"${role}" — selecionou valor "${step.value}" (${step.selector}).`);
+      } else if (step.action === 'click') {
+        el.click();
+        recordDebug(siteKey, 'extra_step_done', `"${role}" — clicou (${step.selector}).`);
+        await sleep(300);
+      }
+    }
+  }
+
   /* Fluxo genérico reaproveitado pelos dois sites: preenche o CNPJ, envia o
      formulário, aguarda captcha (se aparecer) e resultado, e então localiza
      um jeito de salvar o PDF — link direto (download silencioso) ou botão
@@ -370,6 +473,7 @@
       recordDebug(siteKey, 'cnpj_input_found', elementToSelector(input));
       setNativeValue(input, cnpj);
       await sleep(300);
+      await runExtraSteps(siteKey);
 
       const submit = await waitFor(
         () => resolveElement('submitButton', siteKey, selectorOverrides, () => findButtonHeuristic(SUBMIT_TEXT_PRIORITY)),
@@ -391,6 +495,19 @@
           if (detectResult()) return { type: 'result' };
           return null;
         }, { timeout: timeoutMs, interval: 400 });
+      }
+
+      /* O CNDT normalmente gera o PDF na hora, igual RFB/Caixa (pego pelo
+         caminho normal de findDownloadTrigger logo abaixo) — o aviso de
+         "enviado por e-mail" só aparece quando NÃO existe link de PDF na
+         página, então só entra como sucesso alternativo nesse caso, nunca
+         no lugar da busca normal por um trigger de download. */
+      function checkEmailSentFallback() {
+        if (!detectEmailSent()) return false;
+        const detail = extractMatchSnippet(EMAIL_SENT_HINTS) || 'Certidão emitida e enviada por e-mail.';
+        recordDebug(siteKey, 'emailed', detail, true);
+        sendStatus(siteKey, 'emailed', detail);
+        return true;
       }
 
       function reportUnavailable(overrideDetail) {
@@ -429,7 +546,20 @@
       }
 
       recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
-      sendStatus(siteKey, 'result_ready');
+
+      /* Alguns estados são definitivos e não vão gerar PDF nenhum (CNPJ
+         inválido, empregador não cadastrado no FGTS, etc.) — reporta como
+         erro dessa certidão específica e nem tenta procurar botão de
+         emitir/baixar, que não existirá. */
+      const classification = classifyResultText();
+      if (classification === 'bloqueado') {
+        const detail = extractMatchSnippet(RESULT_BLOCKED_HINTS) || 'O site indicou que não é possível emitir a certidão para este CNPJ agora.';
+        recordDebug(siteKey, 'result_blocked', detail, true);
+        sendStatus(siteKey, 'error', detail);
+        return;
+      }
+
+      sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL[classification] || null);
 
       /* O Gemini Nano (quando disponível, só no Chrome) lê o texto visível
          da página e classifica se a certidão saiu regular, com pendências,
@@ -446,19 +576,28 @@
       await sleep(500);
 
       /* Alguns desses portais mostram a "situação" numa primeira consulta e
-         só geram o PDF da certidão depois de um clique explícito em
-         "Emitir certidão" — se esse botão existir, aciona-o antes de
-         procurar o link de download. */
-      const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
-      if (emitBtn && isVisible(emitBtn) && !emitBtn.disabled) {
-        recordDebug(siteKey, 'emit_button_found', `"${textOf(emitBtn)}" (${elementToSelector(emitBtn)})`);
+         só geram o PDF depois de um ou mais cliques extras — a Caixa, por
+         exemplo, usa um botão "Obter Certificado" nessa etapa, e pode ter
+         mais de uma confirmação em sequência. Repete a busca por um botão
+         de emitir/obter/confirmar até achar um jeito de baixar ou esgotar
+         as tentativas, em vez de assumir que é sempre um clique só. */
+      const MAX_EMIT_STEPS = 3;
+      for (let step = 0; step < MAX_EMIT_STEPS; step++) {
+        if (findDownloadTrigger()) break;
+        const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
+        if (!emitBtn || !isVisible(emitBtn) || emitBtn.disabled) break;
+        recordDebug(siteKey, 'emit_button_found', `"${textOf(emitBtn)}" (${elementToSelector(emitBtn)}) [passo ${step + 1}/${MAX_EMIT_STEPS}]`);
         sendStatus(siteKey, 'emitting');
         emitBtn.click();
-        await waitFor(() => findDownloadTrigger(), { timeout: 20000, interval: 500 });
+        await waitFor(
+          () => findDownloadTrigger() || resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS])),
+          { timeout: 20000, interval: 500 }
+        );
       }
 
       const trigger = resolveElement('downloadTrigger', siteKey, selectorOverrides, findDownloadTrigger);
       if (!trigger) {
+        if (checkEmailSentFallback()) return;
         recordDebug(siteKey, 'download_trigger_missing', 'Nenhum link .pdf nem botão de baixar/salvar/imprimir encontrado.', true);
         sendStatus(siteKey, 'manual_save_needed');
         return;
@@ -487,6 +626,7 @@
         return;
       }
 
+      if (checkEmailSentFallback()) return;
       sendStatus(siteKey, 'manual_save_needed');
     } catch (err) {
       sendStatus(siteKey, 'error', String(err && err.message ? err.message : err));
@@ -504,6 +644,8 @@
     detectCaptcha,
     detectResult,
     detectTemporarilyUnavailable,
+    detectEmailSent,
+    classifyResultText,
     extractMatchSnippet,
     findDownloadTrigger,
     elementToSelector,
@@ -511,6 +653,7 @@
     fetchAsBase64,
     enablePickerMode,
     runFlow,
+    runExtraSteps,
     snapshotPage,
     recordDebug,
     SUBMIT_TEXT_PRIORITY,

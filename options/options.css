@@ -35,7 +35,7 @@ header h1 { font-size: 18px; margin: 0; }
 
 .intro { color: var(--muted); font-size: 13px; }
 
-section.site-config, section.folder-config, section.history, section.debug-log, section.ai-suggestions {
+section.site-config, section.folder-config, section.history, section.debug-log, section.ai-suggestions, section.task-mining {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;

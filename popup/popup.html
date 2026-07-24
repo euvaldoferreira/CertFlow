@@ -16,22 +16,16 @@
     <input id="cnpj-input" name="cnpj" type="text" inputmode="numeric" placeholder="00.000.000/0000-00" autocomplete="off" />
     <p id="cnpj-error" class="error" hidden></p>
 
+    <label class="section-label">Certidões a emitir</label>
+    <div id="site-checkboxes" aria-label="Certidões a emitir"></div>
+
     <div class="actions">
       <button type="submit" id="start-btn">Emitir certidões</button>
       <button type="button" id="cancel-btn" hidden>Cancelar</button>
     </div>
   </form>
 
-  <section id="steps" aria-label="Progresso">
-    <div class="step" data-site="rfb">
-      <span class="dot"></span>
-      <span class="label">Receita Federal — Regularidade Fiscal</span>
-    </div>
-    <div class="step" data-site="caixa">
-      <span class="dot"></span>
-      <span class="label">Caixa — Regularidade FGTS (CRF)</span>
-    </div>
-  </section>
+  <section id="steps" aria-label="Progresso"></section>
 
   <section id="log-section">
     <h2>Andamento</h2>

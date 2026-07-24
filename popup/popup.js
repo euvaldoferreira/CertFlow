@@ -6,10 +6,10 @@
   const cancelBtn = document.getElementById('cancel-btn');
   const logList = document.getElementById('log-list');
   const openOptions = document.getElementById('open-options');
-  const stepEls = {
-    rfb: document.querySelector('.step[data-site="rfb"]'),
-    caixa: document.querySelector('.step[data-site="caixa"]'),
-  };
+  const siteCheckboxes = document.getElementById('site-checkboxes');
+  const stepsSection = document.getElementById('steps');
+
+  let availableSites = {};
 
   function maskAsYouType(digits) {
     let out = digits;
@@ -26,6 +26,34 @@
     cnpjError.hidden = true;
   });
 
+  function getSelectedSites() {
+    return Array.from(siteCheckboxes.querySelectorAll('input[type="checkbox"]:checked')).map((cb) => cb.value);
+  }
+
+  function renderSiteCheckboxes(sites, selected) {
+    const selectedSet = new Set(selected && selected.length ? selected : Object.keys(sites));
+    siteCheckboxes.innerHTML = '';
+    Object.entries(sites).forEach(([siteKey, info]) => {
+      const label = document.createElement('label');
+      label.className = 'site-checkbox';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = siteKey;
+      cb.checked = selectedSet.has(siteKey);
+      cb.addEventListener('change', () => {
+        browser.storage.local.set({ selectedCertidoes: getSelectedSites() });
+      });
+
+      const span = document.createElement('span');
+      span.textContent = info.label + (info.mode === 'manual' ? ' (manual — exige login gov.br)' : '');
+
+      label.appendChild(cb);
+      label.appendChild(span);
+      siteCheckboxes.appendChild(label);
+    });
+  }
+
   function renderLog(run) {
     logList.innerHTML = '';
     (run?.log || []).forEach((entry) => {
@@ -38,24 +66,27 @@
   }
 
   function renderSteps(run) {
-    Object.entries(stepEls).forEach(([site, el]) => {
-      el.classList.remove('active', 'done', 'error');
-      if (!run) return;
+    stepsSection.innerHTML = '';
+    if (!run) return;
+    (run.selectedSites || []).forEach((siteKey) => {
+      const job = run.jobs?.[siteKey];
+      const div = document.createElement('div');
+      div.className = 'step';
+      div.dataset.site = siteKey;
 
-      const result = run.siteResults?.[site];
-      if (result === 'success') {
-        el.classList.add('done');
-        return;
-      }
-      if (result === 'error') {
-        el.classList.add('error');
-        return;
-      }
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = availableSites[siteKey]?.label || siteKey;
+      div.appendChild(dot);
+      div.appendChild(label);
 
-      const idx = run.order.indexOf(site);
-      if (idx < run.index) el.classList.add('done');
-      else if (idx === run.index && run.status === 'running') el.classList.add('active');
-      else if (idx === run.index && run.status === 'error') el.classList.add('error');
+      if (job?.status === 'success') div.classList.add('done');
+      else if (job?.status === 'error') div.classList.add('error');
+      else if (run.status === 'running' && (job?.status === 'running' || job?.status === 'pending')) div.classList.add('active');
+
+      stepsSection.appendChild(div);
     });
   }
 
@@ -64,13 +95,20 @@
     startBtn.disabled = running;
     startBtn.textContent = running ? 'Executando…' : 'Emitir certidões';
     cancelBtn.hidden = !running;
+    siteCheckboxes.querySelectorAll('input').forEach((cb) => {
+      cb.disabled = running;
+    });
     renderLog(run);
     renderSteps(run);
   }
 
   async function refresh() {
-    const { run, lastCnpj } = await browser.runtime.sendMessage({ type: 'GET_RUN_STATE' });
+    const { run, lastCnpj, availableSites: sites, selectedCertidoes } = await browser.runtime.sendMessage({ type: 'GET_RUN_STATE' });
+    availableSites = sites || {};
     if (!cnpjInput.value && lastCnpj) cnpjInput.value = maskAsYouType(lastCnpj);
+    if (!siteCheckboxes.childElementCount) {
+      renderSiteCheckboxes(availableSites, (run && run.selectedSites) || selectedCertidoes || []);
+    }
     renderRunning(run);
   }
 
@@ -82,9 +120,15 @@
       cnpjError.hidden = false;
       return;
     }
+    const selectedSites = getSelectedSites();
+    if (!selectedSites.length) {
+      cnpjError.textContent = 'Selecione ao menos uma certidão.';
+      cnpjError.hidden = false;
+      return;
+    }
     startBtn.disabled = true;
     startBtn.textContent = 'Iniciando…';
-    const result = await browser.runtime.sendMessage({ type: 'START_RUN', cnpj: digits });
+    const result = await browser.runtime.sendMessage({ type: 'START_RUN', cnpj: digits, selectedSites });
     if (!result.ok) {
       cnpjError.textContent = result.error;
       cnpjError.hidden = false;

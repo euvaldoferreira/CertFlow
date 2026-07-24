@@ -1,15 +1,25 @@
 # CertFlow
 
-Extensão para Firefox e Chrome que automatiza a emissão de duas certidões a partir de um CNPJ:
+Extensão para Firefox e Chrome que automatiza a emissão de certidões a partir de um CNPJ. O usuário
+escolhe quais quer emitir (a escolha fica memorizada para a próxima vez):
 
 1. **Certidão de Regularidade Fiscal** — Receita Federal (`servicos.receitafederal.gov.br/servico/certidoes`)
 2. **Certificado de Regularidade do FGTS (CRF)** — Caixa, via Consulta Regularidade do Empregador (`consulta-crf.caixa.gov.br`)
+3. **CNDT — Certidão Negativa de Débitos Trabalhistas** — TST (`cndt-certidao.tst.jus.br`)
+4. **Certidão de Regularidade — Simples Nacional** (`www8.receita.fazenda.gov.br`) — exige login gov.br,
+   então roda em **modo manual** (ver seção própria abaixo)
 
-O fluxo abre cada site, preenche o CNPJ, envia o formulário e salva o PDF gerado automaticamente em
-`Downloads/CertFlow/<CNPJ>/`. **O único passo manual é resolver o captcha, quando ele aparecer** — o
-resto (preencher campo, clicar em consultar, localizar o link de download, salvar o arquivo e passar
-para a próxima certidão) é feito pela extensão. No Chrome, o resultado de cada certidão também é
-interpretado pelo **Gemini Nano** (IA on-device) — veja a seção própria abaixo.
+Para as três primeiras, o fluxo abre a aba, preenche o CNPJ, envia o formulário e salva o PDF gerado
+automaticamente em `Downloads/CertFlow/<CNPJ>/`. **O único passo manual é resolver o captcha, quando ele
+aparecer** — o resto (preencher campo, clicar em consultar, localizar o link de download, salvar o
+arquivo) é feito pela extensão. No Chrome, o resultado de cada certidão também é interpretado pelo
+**Gemini Nano** (IA on-device) — veja a seção própria abaixo.
+
+Uma certidão emitida com falha ou pendente de captcha **não trava as demais**: ao clicar em "Emitir
+certidões", a extensão abre uma aba para **cada** certidão selecionada, todas de uma vez — nenhuma
+espera a outra terminar. Cada aba avança sozinha até onde conseguir (até precisar de captcha, ou, no
+caso do Simples Nacional, até o login/emissão manual); o progresso de cada uma aparece separado no
+popup.
 
 O código-fonte (`background.js`, `content/`, `lib/`, `popup/`, `options/`, `icons/`) é o mesmo para os
 dois navegadores; só o manifesto muda (`manifest.json` para Firefox, `manifest.chrome.json` para Chrome),
@@ -47,19 +57,26 @@ arquivo fonte, rode o build de novo e clique em "Recarregar" na página de exten
 
 ## Como usar
 
-- **Digitando o CNPJ**: clique no ícone da extensão, digite o CNPJ e clique em "Emitir certidões".
+- **Digitando o CNPJ**: clique no ícone da extensão, marque as certidões que quer emitir (a seleção
+  fica salva e vem marcada da mesma forma da próxima vez) e clique em "Emitir certidões".
 - **Via seleção de texto**: selecione um CNPJ em qualquer página, clique com o botão direito e escolha
-  "CertFlow: emitir certidões para...". Isso dispensa abrir o popup e digitar.
-- Acompanhe o progresso no popup: cada site aparece marcado como pendente / em andamento / concluído.
-- Se um captcha aparecer em alguma das abas, a extensão avisa (notificação do sistema + aba fica em
-  foco) e pausa **só aquele site** até você resolvê-lo; a extração do resultado e o salvamento continuam
-  sozinhos assim que o captcha é validado.
+  "CertFlow: emitir certidões para...". Usa a mesma seleção de certidões salva nas Configurações/popup —
+  dispensa abrir o popup e digitar.
+- Acompanhe o progresso no popup: cada certidão selecionada aparece numa aba própria, aberta em paralelo
+  com as demais, marcada como pendente / em andamento / concluído / erro.
+- Se um captcha aparecer em alguma das abas, a extensão avisa (notificação do sistema) e pausa **só
+  aquele site** até você resolvê-lo; a extração do resultado e o salvamento continuam sozinhos assim que
+  o captcha é validado — as outras certidões seguem seu próprio andamento nesse meio tempo.
+- Uma certidão que falhar (site indisponível após as tentativas automáticas, CNPJ bloqueado para aquele
+  serviço, etc.) não impede as demais de concluir; o resumo final do popup mostra quais deram certo e
+  quais falharam.
 
 ## Calibrando os seletores (importante na primeira execução)
 
-Os dois sites são aplicações dinâmicas (Angular na Receita Federal, JSF na Caixa) que mudam de
-estrutura HTML entre atualizações — não existe um seletor CSS estável que eu possa garantir sem acessar
-o DOM renderizado ao vivo. Por isso o CertFlow tenta localizar os campos automaticamente por heurística
+Os três sites automatizados (Receita Federal, Caixa, CNDT) são aplicações dinâmicas (Angular, JSF)
+que mudam de estrutura HTML entre atualizações — não existe um seletor CSS estável que eu possa garantir
+sem acessar o DOM renderizado ao vivo. Por isso o CertFlow tenta localizar os campos automaticamente por
+heurística
 (atributos como `name`/`formcontrolname`/`placeholder` contendo "cnpj", texto do botão como
 "Consultar"/"Emitir", link terminando em `.pdf`, etc.), e caso não encontre, permite fixar manualmente:
 
@@ -81,6 +98,21 @@ Alguns fluxos também separam "consultar situação" de "emitir o PDF" em dois c
 caso do site no seu acesso, use o campo opcional **"Botão emitir (se houver etapa separada)"** nas
 Configurações para apontar esse segundo botão — a extensão clicará nele automaticamente depois de obter
 o resultado da consulta, antes de procurar o link de download.
+
+## Certidões com comportamento diferente
+
+**CNDT (TST)**: normalmente gera o PDF na hora, logo depois do captcha, do mesmo jeito que RFB e Caixa —
+mas esse site também pode responder que a certidão foi **enviada por e-mail** em vez de mostrar um link
+de download. A extensão já reconhece essa mensagem ("emitida e enviada por e-mail") como sucesso; nesse
+caso o item aparece concluído no popup, mas o arquivo não fica em `Downloads/`, é preciso checar a caixa
+de entrada (e o spam) do e-mail cadastrado.
+
+**Simples Nacional**: os serviços de regularidade desse portal ficam atrás de login com conta gov.br, o
+que foge do padrão "preencher CNPJ e resolver captcha" das outras três certidões — não faz sentido a
+extensão tentar automatizar (ou armazenar) uma sessão de login. Por isso essa certidão roda em **modo
+manual**: a extensão só abre a aba em `www8.receita.fazenda.gov.br` e espera. Assim que você fecha a
+aba (depois de fazer login e emitir manualmente), a extensão marca aquele item como concluído no popup —
+ela não verifica se a certidão foi realmente baixada, então confira no navegador antes de fechar.
 
 ## Quando o site diz "tente novamente mais tarde"
 
@@ -176,6 +208,35 @@ Em **Configurações → Sugestões de seletor por IA**:
   extensão só consulta a última sugestão já calculada (sem custo de IA extra) antes de abrir cada site
   numa execução.
 
+### Modo de aprendizado (Task Mining / Process Mining)
+
+Às vezes um site tem uma etapa que a extensão simplesmente não tem um campo pronto para representar —
+por exemplo, um seletor de UF que precisa ser escolhido antes de consultar, ou uma caixa de "aceito os
+termos". Em vez de eu precisar adivinhar isso, dá pra **ensinar fazendo**: em
+**Configurações → Modo de aprendizado**, ligue "Ativar modo de aprendizado", abra o site manualmente e
+faça o passo que falta você mesmo, uma vez, do jeito normal (clicando, selecionando).
+
+Assim que o modo é ativado numa página, a extensão já registra qual site é e um retrato dos elementos
+disponíveis naquele momento (mesmo antes de qualquer clique) — além de, claro, os próprios eventos
+observados a seguir. Enquanto ativo, a extensão observa em segundo plano:
+
+- Em quais botões/links você clica (texto do botão + seletor).
+- Qual opção você escolhe em campos `<select>` (ex.: qual UF — é um valor de uma lista fechada, não
+  digitado, então não tem o mesmo risco de privacidade que texto livre).
+- Que um campo de texto foi preenchido — **nunca o que foi digitado nele**. O campo de CNPJ é
+  ignorado por completo nessa observação, porque a extensão já sabe lidar com ele sozinha.
+
+Nada disso roda enquanto a própria extensão está executando um fluxo automatizado nesta aba — só
+quando é você operando o site manualmente com o modo ligado. Essa sequência observada alimenta a mesma
+análise por IA da seção anterior: além de sugerir os 4 campos fixos, a IA pode propor um "passo extra"
+(ex.: `ufSelect` → selecionar `"SP"` num `<select>`, ou `aceiteTermos` → clicar num checkbox) — sempre
+escolhendo entre elementos reais que a extensão já viu na página, nunca um seletor inventado, e **nunca
+código** — só mais um item de configuração, do mesmo jeito que os seletores dos 4 campos fixos. Passos
+extras aceitos aparecem na mesma lista de sugestões, com "Aplicar" por item, e são executados
+automaticamente logo depois de preencher o CNPJ e antes de clicar em consultar em toda execução
+seguinte. Se o elemento configurado sumir da página numa execução futura, esse passo é só pulado (com
+aviso no log) — nunca trava o fluxo.
+
 ## Onde os arquivos são salvos
 
 `Downloads/<pasta configurada>/<CNPJ sem máscara>/<site>_<timestamp>.pdf`. A pasta padrão é `CertFlow`
@@ -194,13 +255,18 @@ impressão), o comportamento depende do navegador:
 
 - `manifest.json` / `manifest.chrome.json` — os dois manifestos (Firefox e Chrome); `scripts/build.sh`
   monta `dist-firefox/` e `dist-chrome/` a partir deles.
-- `background.js` — orquestra a sequência de sites, mensagens dos content scripts, downloads, retry
-  automático (via `alarms`) e menu de contexto. Roda como `background.scripts` no Firefox e como
-  service worker no Chrome (o próprio arquivo detecta o ambiente e ajusta o carregamento de `lib/`).
-- `content/common.js` — heurísticas de DOM, detecção de captcha/resultado/indisponibilidade, modo
-  "selecionar na página", fluxo genérico de preenchimento (`runFlow`).
+- `background.js` — orquestra as certidões selecionadas como **jobs paralelos** (uma aba por certidão,
+  abertas ao mesmo tempo, sem uma depender da outra), mensagens dos content scripts, downloads, retry
+  automático por site (via `alarms`), modo manual (fecha aba = concluído) e menu de contexto. Roda como
+  `background.scripts` no Firefox e como service worker no Chrome (o próprio arquivo detecta o ambiente
+  e ajusta o carregamento de `lib/`).
+- `content/common.js` — heurísticas de DOM, detecção de captcha/resultado/indisponibilidade/envio por
+  e-mail, modo "selecionar na página", fluxo genérico de preenchimento (`runFlow`).
 - `content/ai.js` — integração com o Gemini Nano (Chrome); não faz nada em navegadores sem o recurso.
-- `content/rfb-certidoes.js`, `content/caixa-crf.js` — pontos de entrada específicos de cada site.
+- `content/task-mining.js` — observador passivo do modo de aprendizado; só ativo quando ligado nas
+  Configurações e quando é o usuário operando o site manualmente (nunca durante um run automatizado).
+- `content/rfb-certidoes.js`, `content/caixa-crf.js`, `content/cndt-certidoes.js` — pontos de entrada
+  específicos de cada site automatizado (o Simples Nacional não tem content script: roda em modo manual).
 - `lib/cnpj.js` — validação (dígito verificador) e formatação de CNPJ.
 - `lib/browser-shim.js` — deixa `browser.*` funcionar também no Chrome (que só expõe `chrome.*`).
 - `popup/` — UI de disparo e acompanhamento.
@@ -212,7 +278,9 @@ impressão), o comportamento depende do navegador:
 - Só cobre CNPJ completo (14 dígitos); consulta por CNPJ raiz com seleção de UF não é tratada.
 - Captchas são sempre resolvidos manualmente pelo usuário — a extensão nunca tenta contornar ou
   automatizar a resolução deles.
-- Os seletores automáticos foram escritos por heurística, sem acesso ao DOM ao vivo dos dois sites no
+- O Simples Nacional não é automatizado de ponta a ponta: exige login gov.br, então a extensão só abre
+  a aba e espera (modo manual) — ver "Certidões com comportamento diferente" acima.
+- Os seletores automáticos foram escritos por heurística, sem acesso ao DOM ao vivo dos sites no
   momento da criação da extensão; use o modo "Selecionar na página" se a detecção automática falhar.
 - A interpretação por IA depende do Gemini Nano estar disponível e com o modelo já baixado no Chrome do
   usuário (ver seção acima); não há fallback equivalente no Firefox, que não tem essa API.

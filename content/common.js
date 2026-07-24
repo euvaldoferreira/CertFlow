@@ -28,6 +28,20 @@
   const EXCLUDE_CONTEXT_HINTS = /autenticidade|n[uú]mero de controle|certid[aã]o j[aá] emitida|validar certid[aã]o|consultar certid[aã]o emitida/i;
   const CAPTCHA_HINTS = /recaptcha|hcaptcha|h-captcha|g-recaptcha|captcha/i;
   const RESULT_TEXT_HINTS = /certid[aã]o emitida|situa[cç][aã]o regular|regular perante|certificado de regularidade|v[aá]lida at[eé]|n[uú]mero da certid[aã]o|n[uú]mero do certificado|certid[aã]o v[aá]lida encontrada|j[aá] existe uma certid[aã]o v[aá]lida/i;
+  /* Caixa: "Obtenha o Certificado de Regularidade do FGTS - CRF" é o sinal
+     real de que há certificado pra pegar — mas o trecho "Certificado de
+     Regularidade do FGTS - CRF" fica dentro de um <a> (é clicável), e
+     detectionText() exclui todo <a> do texto (pra não confundir com o
+     link permanente do menu, que causava falso positivo de resultado
+     quase instantâneo — ver RESULT_TEXT_HINTS acima). Isso apagava
+     também esse sinal legítimo, fazendo a extensão não reconhecer um
+     resultado que na verdade existia (confirmado por um usuário: a tela
+     mostrava exatamente essa frase, mas a extensão dizia "nenhum
+     resultado reconhecido"). Por isso esse padrão específico é checado
+     contra o texto CRU da página (document.body.innerText), não contra
+     detectionText() — só ele tem esse tratamento especial, porque só ele
+     depende do texto de dentro de um link pra ser reconhecido. */
+  const RESULT_CAIXA_OBTENHA_HINTS = /obtenha\s+o\s+certificado\s+de\s+regularidade\s+do\s+fgts/i;
   /* A Receita Federal pode devolver três resultados diferentes para o
      mesmo CNPJ — todos geram um PDF para baixar, mas o usuário precisa
      saber qual saiu. Ordem de checagem importa: "positiva com efeitos de
@@ -293,7 +307,8 @@
       RESULT_TEXT_HINTS.test(bodyText) ||
       RESULT_BLOCKED_HINTS.test(bodyText) ||
       RESULT_SIMPLES_OPTANTE_HINTS.test(bodyText) ||
-      RESULT_CAIXA_IMPEDIMENTO_HINTS.test(bodyText)
+      RESULT_CAIXA_IMPEDIMENTO_HINTS.test(bodyText) ||
+      RESULT_CAIXA_OBTENHA_HINTS.test(document.body.innerText || '')
     );
   }
 
@@ -324,6 +339,9 @@
     if (RESULT_POSITIVA_HINTS.test(text)) return 'positiva';
     if (RESULT_NEGATIVA_HINTS.test(text)) return 'negativa';
     if (RESULT_TEXT_HINTS.test(text)) return 'regular';
+    /* Checado contra o texto cru (não detectionText()) pelo mesmo motivo
+       de detectResult() acima — ver comentário em RESULT_CAIXA_OBTENHA_HINTS. */
+    if (RESULT_CAIXA_OBTENHA_HINTS.test(document.body.innerText || '')) return 'regular';
     /* "não optante" precisa ser testado antes do genérico "optante", já
        que a frase negativa também contém a palavra "optante". */
     if (RESULT_SIMPLES_NAO_OPTANTE_HINTS.test(text)) return 'simples_nao_optante';

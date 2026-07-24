@@ -284,6 +284,15 @@ aparecia só como uma detecção suspeita rápida demais (poucos milissegundos a
 mostra o padrão exato e o trecho de texto que casou, apontando direto pro menu de navegação como causa
 (corrigido excluindo cabeçalho/navegação/rodapé/links do texto usado nessas detecções).
 
+Essa correção, por sua vez, criou um efeito colateral: quando a Caixa realmente tem um certificado
+disponível, a página mostra "Obtenha o Certificado de Regularidade do FGTS - CRF", e o trecho
+"Certificado de Regularidade do FGTS - CRF" fica dentro de um link clicável — exatamente o tipo de texto
+que passou a ser excluído. Isso fazia a extensão não reconhecer um resultado que realmente existia
+(confirmado por um usuário: a mensagem aparecia na tela, mas a extensão dizia "nenhum resultado
+reconhecido"). Corrigido com um padrão específico para essa frase, checado contra o texto puro da página
+em vez do texto sem links — é o único caso que precisa desse tratamento à parte, porque depende do texto
+de dentro de um link pra ser reconhecido.
+
 Mesmo depois desse ajuste, a Receita Federal continuava "detectando resultado" entre 6 e 34ms após o
 clique em "Emitir Certidão" (confirmado em log real, incluindo depois da correção acima) — tempo
 impossível para qualquer resposta do servidor, então era outro trecho de texto (fora de header/nav/

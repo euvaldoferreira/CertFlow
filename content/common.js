@@ -75,7 +75,14 @@
       cnpjInput: '#gerarCertidaoForm\\:cpfCnpj',
     },
     simples: {
+      /* O campo espera só dígitos (sem pontuação) — já é assim por padrão,
+         já que o CNPJ chega em runFlow() sempre sem máscara
+         (CNPJUtil.onlyDigits em background.js, antes de qualquer site). */
       cnpjInput: '#Cnpj',
+      /* Depois de "Consultar", o hCaptcha faz o POST de verdade (ver
+         processResult() acima) e a página de resultado tem um botão
+         "Gerar PDF" com esse id — é o gatilho real de download. */
+      downloadTrigger: '#gerarpdf',
     },
   };
   /* Depois de preencher o CNPJ, alguns sites esperam o foco já estar no

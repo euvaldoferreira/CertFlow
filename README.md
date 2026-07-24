@@ -116,10 +116,15 @@ emitir:
 - **"Validade mínima restante (dias)"** (30 por padrão): mesmo com o reaproveitamento ligado, a extensão
   só reaproveita se a certidão encontrada ainda for válida por pelo menos esse número de dias. Se não for
   (ou se nenhuma certidão "válida" for encontrada na lista), ela navega de volta para a URL inicial do
-  serviço e refaz o fluxo do zero, dessa vez indo direto para "Emitir Nova Certidão" — não é um simples
-  reload: a aba está numa rota profunda do fluxo (ex.: `.../cnpj/consultar/resultado`), e recarregar essa
-  mesma URL faz a SPA cair numa tela de "escolher tipo de certidão" em vez de restaurar o estado (a
-  navegação depende do roteamento client-side do Angular, não de um load direto nessa rota).
+  serviço e refaz o fluxo do zero, dessa vez indo direto para "Emitir Nova Certidão".
+
+  Essa navegação de volta precisou de dois passos pra funcionar de verdade: a aba está numa rota profunda
+  da SPA (ex.: `.../cnpj/consultar/resultado`), e trocar só o hash da URL (`tabs.update` para uma URL que
+  difere apenas depois do `#`) não força uma navegação de verdade — o Angular pode simplesmente
+  redirecionar de volta pro mesmo estado profundo em vez de recarregar do zero (confirmado num log real:
+  a aba ficou presa na rota antiga mesmo depois da troca de URL). Por isso a extensão navega primeiro
+  para `about:blank` (um documento genuinamente diferente, que força o descarte completo da página
+  atual) e só depois para a URL real do serviço.
 
 Quando o reaproveitamento é tentado, o fluxo é: clica em "Consultar" (não em "Emitir Nova Certidão"),
 escolhe a opção "data de validade" na tela seguinte (clicando na label, não só no `<input type="radio">`

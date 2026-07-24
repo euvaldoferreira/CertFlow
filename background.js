@@ -555,16 +555,25 @@ async function handleCsStatus(msg, sender) {
       break;
     case 'restart_for_emit_new':
       /* A certidão existente não atendia à validade mínima configurada —
-         volta pra URL inicial conhecida (não um simples reload: a aba
-         está numa rota profunda do fluxo — ex.: .../cnpj/consultar/resultado
-         — e recarregar essa mesma URL faz o Angular cair numa tela de
-         "escolher tipo de certidão" em vez de restaurar o estado, porque
-         a SPA depende de navegação client-side, não de um load direto
-         nessa rota) e refaz o fluxo do zero, dessa vez indo direto para
+         precisa voltar pra URL inicial e refazer o fluxo indo direto para
          "Emitir Nova Certidão" (o flag sobrevive à navegação porque
-         currentRun.jobs vive no background, não na aba). */
+         currentRun.jobs vive no background, não na aba).
+
+         Só trocar a URL não bastava: a app é uma SPA com rota via hash
+         (#/home/cnpj/...), e tabs.update para uma URL que só difere no
+         hash não força uma navegação de verdade — o Angular pode até
+         redirecionar de volta pro mesmo estado profundo em vez de
+         recarregar do zero (confirmado num log real: a aba ficou presa
+         na rota antiga, "#/home/cnpj/consultar/resultado", mesmo depois
+         da troca de URL). Navega primeiro para about:blank — um
+         documento de verdade diferente, que força o descarte completo da
+         página atual — e só depois para a URL real, garantindo duas
+         navegações genuínas em vez de uma troca de hash que a SPA possa
+         ignorar ou reverter. */
       job.forceEmitNew = true;
       addLog(`${site.label}: certidão existente não atende à validade mínima configurada — emitindo uma nova.`, 'warn');
+      await browser.tabs.update(job.tabId, { url: 'about:blank' }).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 300));
       await browser.tabs.update(job.tabId, { url: site.url }).catch(() => {});
       break;
     default:

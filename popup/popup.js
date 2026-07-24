@@ -82,9 +82,20 @@
       div.appendChild(dot);
       div.appendChild(label);
 
-      if (job?.status === 'success') div.classList.add('done');
-      else if (job?.status === 'error') div.classList.add('error');
-      else if (run.status === 'running' && (job?.status === 'running' || job?.status === 'pending')) div.classList.add('active');
+      if (job?.status === 'success' && job?.outcome === 'no_certificate') {
+        div.classList.add('done-no-cert');
+        div.title = 'Processo concluído, mas não havia certidão para extrair — a tela foi salva.';
+        const badge = document.createElement('span');
+        badge.className = 'badge-no-cert';
+        badge.textContent = 'sem certidão';
+        div.appendChild(badge);
+      } else if (job?.status === 'success') {
+        div.classList.add('done');
+      } else if (job?.status === 'error') {
+        div.classList.add('error');
+      } else if (run.status === 'running' && (job?.status === 'running' || job?.status === 'pending')) {
+        div.classList.add('active');
+      }
 
       stepsSection.appendChild(div);
     });
@@ -151,6 +162,10 @@
 
   browser.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'RUN_UPDATE') renderRunning(msg.run);
+    if (msg.type === 'PREFILL_CNPJ' && msg.cnpj) {
+      cnpjInput.value = maskAsYouType(CNPJUtil.onlyDigits(msg.cnpj).slice(0, 14));
+      cnpjError.hidden = true;
+    }
   });
 
   const paramCnpj = new URLSearchParams(window.location.search).get('cnpj');

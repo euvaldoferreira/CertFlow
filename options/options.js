@@ -3,11 +3,7 @@
     rfb: 'https://servicos.receitafederal.gov.br/*',
     caixa: 'https://consulta-crf.caixa.gov.br/*',
     cndt: 'https://cndt-certidao.tst.jus.br/*',
-    /* tabs.query({url}) casa com a URL de topo da aba, não do iframe interno
-       onde o formulário de fato roda — por isso aponta pra página inicial,
-       não para consopt.www8... (ver content_scripts com all_frames:true
-       nos manifests para o formulário em si). */
-    simples: 'https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx*',
+    simples: 'https://consopt.www8.receita.fazenda.gov.br/*',
   };
   const SITE_LABELS = {
     rfb: 'Receita Federal',

@@ -6,8 +6,8 @@ escolhe quais quer emitir (a escolha fica memorizada para a próxima vez):
 1. **Certidão de Regularidade Fiscal** — Receita Federal (`servicos.receitafederal.gov.br/servico/certidoes`)
 2. **Certificado de Regularidade do FGTS (CRF)** — Caixa, via Consulta Regularidade do Empregador (`consulta-crf.caixa.gov.br`)
 3. **CNDT — Certidão Negativa de Débitos Trabalhistas** — TST (`cndt-certidao.tst.jus.br`)
-4. **Simples Nacional — Consulta Optantes** (`www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21`)
-   — não é a certidão formal (essa exige login gov.br e não é automatizável), mas a consulta pública que
+4. **Simples Nacional — Consulta Optantes** (`consopt.www8.receita.fazenda.gov.br/consultaoptantes`) —
+   não é a certidão formal (essa exige login gov.br e não é automatizável), mas a consulta pública que
    informa se o CNPJ é optante pelo Simples Nacional
 
 Em todos os quatro, o fluxo abre a aba, preenche o CNPJ, envia o formulário e salva o PDF (ou a página)
@@ -62,10 +62,13 @@ arquivo fonte, rode o build de novo e clique em "Recarregar" na página de exten
   Marque as certidões que quer emitir (a seleção fica salva e vem marcada da mesma forma da próxima vez)
   e clique em "Emitir certidões".
 - **Via seleção de texto**: selecione um CNPJ em qualquer página, clique com o botão direito e escolha
-  "CertFlow: emitir certidões para...". Usa a mesma seleção de certidões salva nas Configurações/popup —
-  dispensa abrir o popup e digitar.
+  "CertFlow: emitir certidões para...". Isso também abre a mesma janela do popup, já com o CNPJ
+  preenchido e a última seleção de certidões marcada — nenhuma aba é aberta antes de você confirmar ali.
 - Acompanhe o progresso no popup: cada certidão selecionada aparece numa aba própria, aberta em paralelo
-  com as demais, marcada como pendente / em andamento / concluído / erro.
+  com as demais, marcada como pendente / em andamento (verde claro) / concluído (verde) / erro (vermelho).
+  Um quarto estado, **âmbar com o selo "sem certidão"**, aparece quando o processo termina mas não havia
+  certidão nenhuma para extrair (ex.: impedimento reportado pela Caixa) — a extensão salva a tela com o
+  aviso, mas isso é diferente de ter conseguido de fato a certidão.
 - Se um captcha aparecer em alguma das abas, a extensão avisa (notificação do sistema) e pausa **só
   aquele site** até você resolvê-lo; a extração do resultado e o salvamento continuam sozinhos assim que
   o captcha é validado — as outras certidões seguem seu próprio andamento nesse meio tempo.
@@ -103,22 +106,40 @@ o resultado da consulta, antes de procurar o link de download.
 
 ## Certidões com comportamento diferente
 
-**CNDT (TST)**: normalmente gera o PDF na hora, logo depois do captcha, do mesmo jeito que RFB e Caixa —
-mas esse site também pode responder que a certidão foi **enviada por e-mail** em vez de mostrar um link
-de download. A extensão já reconhece essa mensagem ("emitida e enviada por e-mail") como sucesso; nesse
-caso o item aparece concluído no popup, mas o arquivo não fica em `Downloads/`, é preciso checar a caixa
-de entrada (e o spam) do e-mail cadastrado.
+**CNDT (TST)**: diferente dos outros sites, aqui o captcha precisa ser resolvido **antes** de clicar em
+"Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, se um captcha já estiver
+visível logo depois de preencher o CNPJ, a extensão não clica em nada: só avisa (a mesma notificação de
+"resolva o captcha") e espera você mesmo resolver e clicar em "Emitir Certidão", monitorando o resultado
+em segundo plano a partir daí.
+
+Normalmente gera o PDF na hora, logo depois do captcha, do mesmo jeito que RFB e Caixa — mas esse site
+também pode responder que a certidão foi **enviada por e-mail** em vez de mostrar um link de download. A
+extensão já reconhece essa mensagem ("emitida e enviada por e-mail") como sucesso; nesse caso o item
+aparece concluído no popup, mas o arquivo não fica em `Downloads/`, é preciso checar a caixa de entrada
+(e o spam) do e-mail cadastrado.
+
+**Caixa (FGTS)**: além do fluxo normal, o site pode responder que "Constam impedimentos na CAIXA para a
+comprovação da regularidade do empregador no FGTS" (com link para a Conectividade Social) em vez de
+gerar um certificado. Isso não é um erro de consulta — é uma resposta definitiva de que não há
+certificado a emitir para aquele CNPJ agora — então a extensão trata como processo concluído e salva a
+tela (com a mensagem) em PDF, em vez de reportar falha.
+
+A página também tem um auto-refresh (`<meta http-equiv="refresh">`, comum em portais JSF de governo pra
+aviso de sessão expirando) que, sem intervenção, recarregava a página sozinha e derrubava o resultado
+antes de dar tempo de clicar em Visualizar/Imprimir. A extensão bloqueia isso com um script à parte
+(`content/caixa-no-refresh.js`) que roda o mais cedo possível (`document_start`) e remove essa tag assim
+que ela aparece, inclusive se for inserida via JS depois do carregamento inicial.
 
 **Simples Nacional**: a certidão formal de regularidade desse portal fica atrás de login com conta
 gov.br, fora do padrão automatizável das demais — por isso a extensão usa a **Consulta Optantes**
-(pública, sem login, `aplicacoes.aspx?id=21`), que informa se o CNPJ é optante pelo Simples Nacional. O
-formulário de verdade não fica na página inicial, e sim num **iframe interno** que carrega de
-`consopt.www8.receita.fazenda.gov.br` — por isso o content script desse domínio roda com
-`all_frames: true` no manifest, injetando direto no iframe assim que ele termina de carregar. O captcha
-é hCaptcha: ao resolvê-lo, o próprio site recarrega a página inteira com o resultado e o botão "Gerar
-PDF" (não é uma atualização via ajax) — a extensão detecta essa recarga (pela ausência do campo de CNPJ)
-e processa o resultado/PDF já visíveis, em vez de tentar preencher o CNPJ de novo numa página que não
-tem mais formulário.
+(pública, sem login), que informa se o CNPJ é optante pelo Simples Nacional. A página inicial oficial
+(`simplesnacional/aplicacoes.aspx?id=21`) só carrega o formulário dentro de um iframe que começa
+**escondido** (`display:none`) e depende de JS do próprio site para aparecer — frágil demais pra
+automação. A extensão vai direto ao formulário real, em `consopt.www8.receita.fazenda.gov.br`, uma
+página HTML simples sem iframe nem redirecionamento. O captcha é hCaptcha: ao resolvê-lo, o próprio site
+recarrega a página inteira com o resultado e o botão "Gerar PDF" (não é uma atualização via ajax) — a
+extensão detecta essa recarga (pela ausência do campo de CNPJ) e processa o resultado/PDF já visíveis,
+em vez de tentar preencher o CNPJ de novo numa página que não tem mais formulário.
 
 O texto exato de sucesso da consulta ("optante"/"não optante pelo Simples Nacional") foi mapeado por
 conhecimento do serviço, não por um teste ao vivo ponta a ponta (a consulta real exige resolver um
@@ -280,6 +301,8 @@ impressão), o comportamento depende do navegador:
   Configurações e quando é o usuário operando o site manualmente (nunca durante um run automatizado).
 - `content/rfb-certidoes.js`, `content/caixa-crf.js`, `content/cndt-certidoes.js`,
   `content/simples-nacional.js` — pontos de entrada específicos de cada site automatizado.
+- `content/caixa-no-refresh.js` — roda separado, em `document_start`, só pra bloquear o auto-refresh da
+  página da Caixa antes que ele derrube o resultado da tela.
 - `lib/cnpj.js` — validação (dígito verificador) e formatação de CNPJ.
 - `lib/browser-shim.js` — deixa `browser.*` funcionar também no Chrome (que só expõe `chrome.*`).
 - `popup/` — UI de disparo e acompanhamento.

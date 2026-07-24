@@ -85,8 +85,13 @@ button {
 }
 .step.active .dot { background: var(--green-light); box-shadow: 0 0 0 3px rgba(47,158,92,.25); }
 .step.done .dot { background: var(--green); }
+.step.done-no-cert .dot { background: var(--amber); }
 .step.error .dot { background: var(--red); }
 .step .label { color: var(--fg); font-size: 12px; }
+.badge-no-cert {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: var(--amber); color: #fff; margin-left: 4px;
+}
 
 #log-section { margin-top: 12px; }
 #log-section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 4px; }

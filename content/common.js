@@ -49,6 +49,14 @@
      de resultado (ambas são respostas válidas da consulta, não falhas). */
   const RESULT_SIMPLES_NAO_OPTANTE_HINTS = /n[aã]o\s+(consta\s+como\s+|é\s+|est[aá]\s+)?optante\s+pelo\s+simples\s+nacional/i;
   const RESULT_SIMPLES_OPTANTE_HINTS = /optante\s+pelo\s+simples\s+nacional/i;
+  /* Mensagem observada na Caixa: "Constam impedimentos na CAIXA para a
+     comprovação da regularidade do empregador no FGTS. Para mais
+     informações, clique aqui https://conectividadesocialv2.caixa.gov.br."
+     Diferente de RESULT_BLOCKED_HINTS (CNPJ inválido, etc.), aqui a
+     consulta funcionou e deu uma resposta definitiva — só que não existe
+     certificado nenhum pra baixar. Trata como processo concluído (salva a
+     tela em PDF), não como erro. */
+  const RESULT_CAIXA_IMPEDIMENTO_HINTS = /imped(imento|imentos)\s+na\s+caixa\s+para\s+a\s+comprova[cç][aã]o\s+da\s+regularidade/i;
   const RESULT_CLASSIFICATION_LABEL = {
     negativa: 'Certidão Negativa (regular, sem pendências)',
     positiva_com_pendencia: 'Certidão Positiva com Efeitos de Negativa (há pendências, mas suspensas)',
@@ -56,6 +64,7 @@
     regular: 'Situação regular',
     simples_nao_optante: 'CNPJ não optante pelo Simples Nacional',
     simples_optante: 'CNPJ optante pelo Simples Nacional',
+    impedimento_caixa: 'Impedimento na Caixa para comprovação de regularidade (ver Conectividade Social)',
   };
   /* Mensagem observada na prática: "O serviço de emissão de certidão está
      temporariamente indisponível. Tente novamente em alguns minutos." —
@@ -92,6 +101,13 @@
   const POST_FILL_FOCUS_SELECTOR = {
     cndt: '#idCampoResposta',
   };
+  /* Nesses sites o captcha precisa ser resolvido ANTES de clicar no botão
+     de emitir/consultar — clicar cedo demais não funciona (o site espera
+     o captcha já resolvido) e pode até invalidar o desafio, obrigando a
+     resolver de novo. Se um captcha já estiver visível logo depois de
+     preencher o CNPJ, a extensão não clica em nada: só avisa o usuário e
+     espera ele mesmo resolver e clicar em emitir/consultar. */
+  const SUBMIT_REQUIRES_CAPTCHA_FIRST = new Set(['cndt']);
   /* O CNDT (TST) não mostra um PDF na própria página — ele confirma no
      texto que já mandou por e-mail ("Certidão EMITIDA e ENVIADA por e-mail
      com sucesso"). Precisa ser verificado ANTES de RESULT_TEXT_HINTS
@@ -240,7 +256,12 @@
 
   function detectResult() {
     const bodyText = document.body.innerText || '';
-    return RESULT_TEXT_HINTS.test(bodyText) || RESULT_BLOCKED_HINTS.test(bodyText) || RESULT_SIMPLES_OPTANTE_HINTS.test(bodyText);
+    return (
+      RESULT_TEXT_HINTS.test(bodyText) ||
+      RESULT_BLOCKED_HINTS.test(bodyText) ||
+      RESULT_SIMPLES_OPTANTE_HINTS.test(bodyText) ||
+      RESULT_CAIXA_IMPEDIMENTO_HINTS.test(bodyText)
+    );
   }
 
   function detectTemporarilyUnavailable() {
@@ -261,6 +282,9 @@
      segue o mesmo caminho de download. */
   function classifyResultText() {
     const text = document.body.innerText || '';
+    /* Checa antes de RESULT_BLOCKED_HINTS: é uma resposta definitiva da
+       Caixa (não um erro de consulta), então não deve virar status "erro". */
+    if (RESULT_CAIXA_IMPEDIMENTO_HINTS.test(text)) return 'impedimento_caixa';
     if (RESULT_BLOCKED_HINTS.test(text)) return 'bloqueado';
     if (RESULT_POSITIVA_PENDENCIA_HINTS.test(text)) return 'positiva_com_pendencia';
     if (RESULT_POSITIVA_HINTS.test(text)) return 'positiva';
@@ -541,6 +565,23 @@
       return;
     }
 
+    /* Resposta definitiva de que não há certificado a emitir (ex.: Caixa
+       reportando impedimentos no FGTS) — o processo terminou, só não gerou
+       PDF nenhum pra baixar. Não é um erro: salva a tela que já mostra a
+       resposta, do mesmo jeito que quando nenhum site oferece um trigger
+       de download, sem gastar tempo procurando botões que não existem. */
+    if (classification === 'impedimento_caixa') {
+      const detail = extractMatchSnippet(RESULT_CAIXA_IMPEDIMENTO_HINTS) || RESULT_CLASSIFICATION_LABEL.impedimento_caixa;
+      recordDebug(siteKey, 'result_impedimento', detail, true);
+      sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL.impedimento_caixa);
+      /* Status próprio (não o "manual_save_needed" genérico): o processo
+         terminou, mas não existe certidão nenhuma pra extrair — só a tela
+         com o aviso. O popup usa isso pra colorir esse caso diferente de
+         um sucesso normal (ver 'no_certificate' em succeedJob). */
+      sendStatus(siteKey, 'concluded_without_certificate', detail);
+      return;
+    }
+
     sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL[classification] || null);
 
     /* O Gemini Nano (quando disponível, só no Chrome) lê o texto visível
@@ -665,6 +706,34 @@
           focusTarget.focus();
           recordDebug(siteKey, 'post_fill_focus', `Foco movido para ${focusSelector}.`);
         }
+      }
+
+      /* Espera um pouco pelo widget do captcha renderizar (alguns carregam
+         de forma assíncrona, um instante depois do resto da página) antes
+         de decidir se ele já está presente. */
+      const captchaAlreadyPresent =
+        SUBMIT_REQUIRES_CAPTCHA_FIRST.has(siteKey) &&
+        (await waitFor(() => detectCaptcha().present || null, { timeout: 5000, interval: 300 }));
+
+      if (captchaAlreadyPresent) {
+        recordDebug(siteKey, 'captcha_before_submit', 'Captcha detectado antes do envio — aguardando o usuário resolver e clicar em emitir/consultar manualmente.');
+        sendStatus(siteKey, 'captcha');
+        const outcome = await waitFor(() => {
+          if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
+          if (detectResult()) return { type: 'result' };
+          return null;
+        }, { timeout: 300000, interval: 400 });
+        if (!outcome) {
+          recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após a resolução do captcha e o envio manual (5 min).', true);
+          sendStatus(siteKey, 'error', 'Tempo esgotado aguardando a resolução do captcha e o envio.');
+          return;
+        }
+        if (outcome.type === 'unavailable') {
+          reportUnavailable(siteKey);
+          return;
+        }
+        await processResult(siteKey, cnpj, selectorOverrides);
+        return;
       }
 
       const submit = await waitFor(

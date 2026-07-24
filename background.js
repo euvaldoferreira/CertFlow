@@ -42,11 +42,12 @@ const SITES = {
   simples: {
     label: 'Simples Nacional - Consulta Optantes',
     fileTag: 'SimplesNacional-consulta-optantes',
-    /* Página oficial da consulta — o formulário de verdade só aparece
-       dentro de um iframe interno (que ainda dá um meta-refresh para
-       consopt.www8.receita.fazenda.gov.br) — por isso o content script
-       desse domínio precisa rodar com all_frames:true (ver manifests). */
-    url: 'https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21',
+    /* A página oficial (simplesnacional/aplicacoes.aspx?id=21) só carrega o
+       formulário dentro de um iframe que começa com display:none e depende
+       de JS do próprio site (EscondeElementos()) pra aparecer — frágil
+       demais pra automação. Vai direto ao formulário real, que é uma
+       página HTML simples sem iframe nem redirecionamento. */
+    url: 'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes',
     mode: 'auto',
   },
 };
@@ -75,11 +76,14 @@ async function getScreenBounds() {
   return { left: 0, top: 0, width: current.width || 1280, height: current.height || 800 };
 }
 
-async function openPopupWindow() {
+async function openPopupWindow(prefillCnpj) {
   if (popupWindowId != null) {
     const existing = await browser.windows.get(popupWindowId).catch(() => null);
     if (existing) {
       await browser.windows.update(popupWindowId, { focused: true });
+      if (prefillCnpj) {
+        browser.runtime.sendMessage({ type: 'PREFILL_CNPJ', cnpj: prefillCnpj }).catch(() => {});
+      }
       return;
     }
     popupWindowId = null;
@@ -91,8 +95,11 @@ async function openPopupWindow() {
   const left = Math.round((bounds.left || 0) + (bounds.width - width) / 2);
   const top = Math.round((bounds.top || 0) + (bounds.height - height) / 2);
 
+  let url = browser.runtime.getURL('popup/popup.html');
+  if (prefillCnpj) url += `?cnpj=${encodeURIComponent(prefillCnpj)}`;
+
   const win = await browser.windows.create({
-    url: browser.runtime.getURL('popup/popup.html'),
+    url,
     type: 'popup',
     width,
     height,
@@ -192,9 +199,14 @@ async function startJob(siteKey, makeActive) {
   persistRun();
 }
 
-function succeedJob(siteKey) {
+/* outcome opcional distingue, dentro de um sucesso, o caso em que o
+   processo terminou mas não havia certidão nenhuma pra extrair (ex.:
+   impedimento reportado pela Caixa) — usado só para colorir o popup
+   diferente de um sucesso normal, não muda o resultado do run. */
+function succeedJob(siteKey, outcome) {
   if (!currentRun || !currentRun.jobs[siteKey]) return;
   currentRun.jobs[siteKey].status = 'success';
+  currentRun.jobs[siteKey].outcome = outcome || 'success';
   checkRunCompletion();
 }
 
@@ -471,6 +483,11 @@ async function handleCsStatus(msg, sender) {
       await attemptSaveAsPdf(job.tabId, msg.siteKey);
       succeedJob(msg.siteKey);
       break;
+    case 'concluded_without_certificate':
+      addLog(`${site.label}: processo concluído, mas não há certidão para extrair${msg.detail ? ' — ' + msg.detail : ''}. Salvando a tela.`, 'warn');
+      await attemptSaveAsPdf(job.tabId, msg.siteKey);
+      succeedJob(msg.siteKey, 'no_certificate');
+      break;
     case 'error':
       failJob(msg.siteKey, msg.detail || 'erro desconhecido');
       break;
@@ -587,8 +604,10 @@ browser.contextMenus.onClicked?.addListener(async (info) => {
     }).catch(() => {});
     return;
   }
-  const { selectedCertidoes } = await browser.storage.local.get('selectedCertidoes');
-  await startRun(digits, selectedCertidoes);
+  /* Não dispara startRun() direto — abre o popup (com o CNPJ já
+     preenchido) pra o usuário confirmar/escolher quais certidões emitir
+     antes de qualquer aba ser aberta, do mesmo jeito que clicar no ícone. */
+  await openPopupWindow(digits);
 });
 
 browser.runtime.onInstalled.addListener(() => {

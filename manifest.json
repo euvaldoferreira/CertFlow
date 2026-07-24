@@ -54,6 +54,12 @@
     },
     {
       "matches": ["https://consulta-crf.caixa.gov.br/*"],
+      "js": ["content/caixa-no-refresh.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://consulta-crf.caixa.gov.br/*"],
       "js": ["lib/cnpj.js", "content/common.js", "content/caixa-crf.js", "content/task-mining.js"],
       "run_at": "document_idle",
       "all_frames": false
@@ -68,7 +74,7 @@
       "matches": ["https://consopt.www8.receita.fazenda.gov.br/*"],
       "js": ["lib/cnpj.js", "content/common.js", "content/simples-nacional.js", "content/task-mining.js"],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     }
   ]
 }

@@ -662,11 +662,24 @@
        chutar de novo, registra periodicamente o estado bruto (dimensões,
        display/visibility/opacity) dos candidatos, com ou sem filtro de
        visibilidade, junto com a resposta final. */
+    /* Achado pelo diagnóstico: input[type="text"] é um seletor CSS que
+       exige o ATRIBUTO type="text" literal no HTML — se o Angular renderiza
+       o campo sem esse atributo (contando com o padrão do navegador, que
+       já é "text"), esse seletor nunca bate, não importa quanto tempo se
+       espere. snapshotPage() nunca teve esse problema porque não filtra
+       por type nenhum, só lê a propriedade .type (que reflete o padrão
+       corretamente) — por isso ele sempre "via" os campos e essa busca
+       nunca via. Corrigido pegando todo <input> e checando `.type` (a
+       propriedade, não o atributo) em vez do seletor CSS. */
+    function findDateCandidates() {
+      return Array.from(document.querySelectorAll('input'))
+        .filter((el) => el.type === 'text')
+        .filter((el) => /selecione a data/i.test(el.getAttribute('placeholder') || ''));
+    }
+
     let lastDiagnosticAt = 0;
     function diagnoseDateFieldCandidates() {
-      const all = Array.from(document.querySelectorAll('input[type="text"]')).filter((el) =>
-        /selecione a data/i.test(el.getAttribute('placeholder') || '')
-      );
+      const all = findDateCandidates();
       if (!all.length) return 'nenhum input com placeholder "Selecione a data" no DOM';
       return all
         .map((el) => {
@@ -682,9 +695,7 @@
         lastDiagnosticAt = Date.now();
         recordDebug(siteKey, 'certidao_valida_datas_diagnostico', diagnoseDateFieldCandidates());
       }
-      const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(
-        (el) => isVisible(el) && /selecione a data/i.test(el.getAttribute('placeholder') || '')
-      );
+      const candidates = findDateCandidates().filter((el) => isVisible(el));
       if (candidates.length < 2) return null;
       const finalIndex = candidates.findIndex((el) => el.getAttribute('name') === 'dataFinal');
       const final = finalIndex >= 0 ? candidates[finalIndex] : candidates[candidates.length - 1];

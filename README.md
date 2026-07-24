@@ -109,20 +109,24 @@ o resultado da consulta, antes de procurar o link de download.
 **RFB (Pessoa Jurídica)**: quando já existe uma certidão válida emitida para o CNPJ, o site mostra
 "Certidão Válida Encontrada" em vez de oferecer emissão direta. Diferente das outras situações, aqui a
 extensão **não** clica em "Emitir Nova Certidão" — clica em "Consultar", escolhe a opção "data de
-validade" na tela seguinte e preenche o período de hoje até 90 dias à frente, depois clica em "Consultar
-Certidão" para chegar à certidão de verdade e seguir o download normalmente. O campo de data final tem
-`name="dataFinal"`, mas o de data inicial (confirmado num snapshot real) não tem `name` nenhum, só um id
-gerado pelo Angular — por isso os dois são achados juntos num único `waitFor`, que exige dois campos de
-texto com o mesmo placeholder ("Selecione a data") visíveis ao mesmo tempo: o que tiver `name="dataFinal"`
-é a data final, o outro é a data inicial. A opção "data de validade" é escolhida clicando na **label**
-(não só no `<input type="radio">` escondido por trás) — testando manualmente, os campos de data aparecem
-em poucos segundos junto com o resto da tela, mas clicar só no input não disparava o efeito completo de
-revelar os campos condicionais em automação, um problema comum em componentes customizados desses design
-systems de governo, onde o clique de verdade é tratado por um listener na label/wrapper visível.
+validade" na tela seguinte (clicando na label, não só no `<input type="radio">` escondido por trás) e
+preenche o período de hoje até 90 dias à frente, depois clica em "Consultar Certidão" para chegar à
+certidão de verdade e seguir o download normalmente. O campo de data final tem `name="dataFinal"`, mas o
+de data inicial não tem `name` nenhum, só um id gerado pelo Angular — por isso os dois são achados juntos,
+usando a posição do `dataFinal` como referência.
+
+Essa busca demorou algumas rodadas de diagnóstico pra acertar: por várias tentativas os campos "não eram
+achados" mesmo esperando bastante, até que a instrumentação revelou a causa real — não era demora nem
+falha no clique, era um bug de seletor. `input[type="text"]` é um seletor CSS que exige o **atributo**
+`type="text"` literal no HTML; como esses campos são renderizados sem esse atributo (contando com o
+padrão do navegador, que já é "text"), o seletor nunca batia, não importava quanto tempo se esperasse.
+Corrigido lendo a propriedade `.type` do elemento em vez do atributo via seletor CSS.
 
 O RFB também acionava um aviso de "resolva o captcha" sem ter captcha nenhum pra resolver — bug real de
 precedência de operadores em `detectCaptcha()` (um `&&`/`||` sem parênteses fazia a checagem de
-visibilidade ser ignorada num dos casos), confirmado por um usuário e corrigido.
+visibilidade ser ignorada num dos casos), confirmado por um usuário e corrigido. E o log de navegação
+tinha uma corrida de leitura-e-escrita que podia perder um evento quando dois `recordDebug()` disparavam
+em sequência rápida — as escritas em `debugLog` agora são serializadas numa fila.
 
 **CNDT (TST)**: diferente dos outros sites, aqui o captcha precisa ser resolvido **antes** de clicar em
 "Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, se um captcha já estiver

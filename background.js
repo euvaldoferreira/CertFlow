@@ -56,6 +56,24 @@ const DEFAULT_SELECTED_SITES = ['rfb', 'caixa'];
 let currentRun = null;
 let popupWindowId = null;
 
+/* Serializa as escritas em storage.local.debugLog: sem isso, duas
+   mensagens DEBUG_LOG chegando próximas (ex.: dois recordDebug() seguidos
+   sem await no content script) fazem um get→push→set clássico de corrida
+   — os dois handlers leem o mesmo array antes de qualquer um escrever de
+   volta, e o segundo set() sobrescreve o primeiro, perdendo um evento
+   silenciosamente. Confirmado num log real onde um evento sumiu. */
+let debugLogWriteChain = Promise.resolve();
+function appendDebugLogEntry(entry) {
+  debugLogWriteChain = debugLogWriteChain
+    .then(async () => {
+      const { debugLog = [] } = await browser.storage.local.get('debugLog');
+      debugLog.push(entry);
+      await browser.storage.local.set({ debugLog: debugLog.slice(-300) });
+    })
+    .catch(() => {});
+  return debugLogWriteChain;
+}
+
 /* Um popup padrão (default_popup) é ancorado pelo próprio navegador perto
    do ícone da extensão — não dá pra reposicionar nem redimensionar por
    CSS. Por isso o manifest não declara default_popup: o clique no ícone
@@ -578,9 +596,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'DEBUG_LOG': {
         const entry = { at: msg.at, siteKey: msg.siteKey, step: msg.step, detail: msg.detail, snapshot: msg.snapshot };
-        const { debugLog = [] } = await browser.storage.local.get('debugLog');
-        debugLog.push(entry);
-        await browser.storage.local.set({ debugLog: debugLog.slice(-300) });
+        await appendDebugLogEntry(entry);
         sendLogToApi([entry], 'certflow-extension-auto').catch(() => {});
         sendResponse({ ok: true });
         break;

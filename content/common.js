@@ -632,10 +632,24 @@
     recordDebug(siteKey, 'certidao_valida_radio_selected', elementToSelector(radio));
     await sleep(300);
 
-    const dataInicialInput = await waitFor(() => document.querySelector('input[name="dataInicial"]'), { timeout: 8000, interval: 300 });
-    const dataFinalInput = document.querySelector('input[name="dataFinal"]');
-    if (!dataInicialInput || !dataFinalInput) {
-      recordDebug(siteKey, 'certidao_valida_datas_missing', 'Campos de data inicial/final não encontrados.', true);
+    /* Confirmado num snapshot real: o campo de data final tem
+       name="dataFinal", mas o de data inicial não tem name (nem
+       formcontrolname) nenhum — só um id gerado pelo Angular. Por isso a
+       data inicial é achada por exclusão: o outro campo de texto com o
+       mesmo placeholder ("Selecione a data"), que não seja o dataFinal. */
+    const dataFinalInput = await waitFor(() => document.querySelector('input[name="dataFinal"]'), { timeout: 8000, interval: 300 });
+    if (!dataFinalInput) {
+      recordDebug(siteKey, 'certidao_valida_data_final_missing', 'Campo "dataFinal" não encontrado.', true);
+      return false;
+    }
+    const dataInicialInput = await waitFor(() => {
+      const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(
+        (el) => isVisible(el) && /selecione a data/i.test(el.getAttribute('placeholder') || '')
+      );
+      return candidates.find((el) => el !== dataFinalInput) || null;
+    }, { timeout: 8000, interval: 300 });
+    if (!dataInicialInput) {
+      recordDebug(siteKey, 'certidao_valida_data_inicial_missing', 'Campo de data inicial não encontrado (só achou dataFinal).', true);
       return false;
     }
 

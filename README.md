@@ -109,9 +109,11 @@ o resultado da consulta, antes de procurar o link de download.
 **RFB (Pessoa Jurídica)**: quando já existe uma certidão válida emitida para o CNPJ, o site mostra
 "Certidão Válida Encontrada" em vez de oferecer emissão direta. Diferente das outras situações, aqui a
 extensão **não** clica em "Emitir Nova Certidão" — clica em "Consultar", escolhe a opção "data de
-validade" na tela seguinte e preenche o período de hoje até 90 dias à frente (`input[name="dataInicial"]`
-e `input[name="dataFinal"]`), depois clica em "Consultar Certidão" para chegar à certidão de verdade e
-seguir o download normalmente.
+validade" na tela seguinte e preenche o período de hoje até 90 dias à frente, depois clica em "Consultar
+Certidão" para chegar à certidão de verdade e seguir o download normalmente. O campo de data final tem
+`name="dataFinal"`, mas o de data inicial (confirmado num snapshot real) não tem `name` nenhum, só um id
+gerado pelo Angular — por isso é achado por exclusão: o outro campo de texto com o mesmo placeholder
+("Selecione a data") que não seja o `dataFinal`.
 
 **CNDT (TST)**: diferente dos outros sites, aqui o captcha precisa ser resolvido **antes** de clicar em
 "Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, se um captcha já estiver

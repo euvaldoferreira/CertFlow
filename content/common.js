@@ -654,12 +654,34 @@
     await sleep(300);
 
     /* Testando manualmente, esses campos aparecem em poucos segundos,
-       junto com o resto da tela — não é demora do servidor. O problema
-       real era o clique no rádio não disparar o efeito completo de revelar
-       os campos condicionais (ver o clique na label acima). O timeout aqui
-       continua generoso só como rede de segurança, não porque a demora
-       seja esperada. */
+       junto com o resto da tela — não é demora do servidor. Já testado:
+       clique na label (não só no input) pra revelar os campos condicionais
+       — mesmo assim, em log real, os campos aparecem no retrato final da
+       página (que também exige isVisible) sem nunca terem sido pegos
+       durante os 30s de tentativas. Pra descobrir o motivo real em vez de
+       chutar de novo, registra periodicamente o estado bruto (dimensões,
+       display/visibility/opacity) dos candidatos, com ou sem filtro de
+       visibilidade, junto com a resposta final. */
+    let lastDiagnosticAt = 0;
+    function diagnoseDateFieldCandidates() {
+      const all = Array.from(document.querySelectorAll('input[type="text"]')).filter((el) =>
+        /selecione a data/i.test(el.getAttribute('placeholder') || '')
+      );
+      if (!all.length) return 'nenhum input com placeholder "Selecione a data" no DOM';
+      return all
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return `id=${el.id || '(sem id)'} name=${el.getAttribute('name') || '(sem name)'} rect=${Math.round(rect.width)}x${Math.round(rect.height)} display=${style.display} visibility=${style.visibility} opacity=${style.opacity} isVisible=${isVisible(el)}`;
+        })
+        .join(' | ');
+    }
+
     const dateFields = await waitFor(() => {
+      if (Date.now() - lastDiagnosticAt > 3000) {
+        lastDiagnosticAt = Date.now();
+        recordDebug(siteKey, 'certidao_valida_datas_diagnostico', diagnoseDateFieldCandidates());
+      }
       const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(
         (el) => isVisible(el) && /selecione a data/i.test(el.getAttribute('placeholder') || '')
       );
@@ -674,7 +696,7 @@
       return initial && final ? { initial, final } : null;
     }, { timeout: 30000, interval: 300 });
     if (!dateFields) {
-      recordDebug(siteKey, 'certidao_valida_datas_missing', 'Não achou os dois campos de data (esperava 2 inputs com placeholder "Selecione a data").', true);
+      recordDebug(siteKey, 'certidao_valida_datas_missing', `Não achou os dois campos de data. Estado final: ${diagnoseDateFieldCandidates()}`, true);
       return false;
     }
     const { initial: dataInicialInput, final: dataFinalInput } = dateFields;

@@ -245,6 +245,17 @@
     alert('Configuração salva.');
   });
 
+  async function loadVerboseDiagnosticsConfig() {
+    const { verboseDiagnostics } = await browser.storage.local.get('verboseDiagnostics');
+    document.getElementById('verbose-diagnostics-enabled').checked = !!verboseDiagnostics;
+  }
+
+  document.getElementById('save-verbose-diagnostics-btn').addEventListener('click', async () => {
+    const verboseDiagnostics = document.getElementById('verbose-diagnostics-enabled').checked;
+    await browser.storage.local.set({ verboseDiagnostics });
+    alert('Configuração salva.');
+  });
+
   async function applyAiField(siteKey, field, selector) {
     const { selectorOverrides = {}, aiAppliedOverrides = {} } = await browser.storage.local.get(['selectorOverrides', 'aiAppliedOverrides']);
     selectorOverrides[siteKey] = selectorOverrides[siteKey] || {};
@@ -378,6 +389,7 @@
   loadApiConfig();
   loadAiConfig();
   loadTaskMiningConfig();
+  loadVerboseDiagnosticsConfig();
   renderAiSuggestions();
   setInterval(refreshTabHints, 3000);
 })();

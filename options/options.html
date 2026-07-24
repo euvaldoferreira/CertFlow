@@ -177,6 +177,23 @@
       <button id="clear-log-btn" type="button">Limpar log</button>
     </div>
 
+    <h3>Modo de gravação detalhada</h3>
+    <p class="intro">
+      Registra muito mais detalhe durante cada execução automatizada: o retrato estrutural completo da
+      página (ids, botões, campos) em praticamente todo passo — não só nas falhas — além de exatamente
+      qual padrão de texto disparou cada detecção de resultado/captcha e quanto tempo levou desde o
+      clique em consultar/emitir. Ainda nunca inclui o CNPJ digitado nem o conteúdo da certidão. Deixe
+      ligado só enquanto estiver diagnosticando um problema específico — gera bem mais eventos que o
+      normal.
+    </p>
+    <div class="field-row checkbox-row">
+      <label for="verbose-diagnostics-enabled">Ativar gravação detalhada</label>
+      <input type="checkbox" id="verbose-diagnostics-enabled" />
+    </div>
+    <div class="actions-row">
+      <button id="save-verbose-diagnostics-btn" type="button">Salvar</button>
+    </div>
+
     <h3>Envio para API própria</h3>
     <p class="intro">
       Se você roda a <code>certflow-api</code> localmente (ver pasta <code>api/</code> do projeto), a

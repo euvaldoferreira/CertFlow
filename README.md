@@ -106,6 +106,13 @@ o resultado da consulta, antes de procurar o link de download.
 
 ## Certidões com comportamento diferente
 
+**RFB (Pessoa Jurídica)**: quando já existe uma certidão válida emitida para o CNPJ, o site mostra
+"Certidão Válida Encontrada" em vez de oferecer emissão direta. Diferente das outras situações, aqui a
+extensão **não** clica em "Emitir Nova Certidão" — clica em "Consultar", escolhe a opção "data de
+validade" na tela seguinte e preenche o período de hoje até 90 dias à frente (`input[name="dataInicial"]`
+e `input[name="dataFinal"]`), depois clica em "Consultar Certidão" para chegar à certidão de verdade e
+seguir o download normalmente.
+
 **CNDT (TST)**: diferente dos outros sites, aqui o captcha precisa ser resolvido **antes** de clicar em
 "Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, se um captcha já estiver
 visível logo depois de preencher o CNPJ, a extensão não clica em nada: só avisa (a mesma notificação de
@@ -193,6 +200,30 @@ Na tela de **Configurações → Log de navegação**, dá para acompanhar os ú
 completo em JSON (`CertFlow/logs/navegacao_<timestamp>.json` na pasta de downloads) ou limpá-lo. Se a
 detecção automática errar um campo, rode uma vez, baixe o log e use-o para ajustar os seletores manuais
 (ou para relatar o problema com detalhes precisos).
+
+### Modo de gravação detalhada
+
+Para diagnosticar problemas mais sutis — não só "campo não encontrado", mas "por que a extensão achou
+que tinha um resultado quando não tinha" — existe **Configurações → Log de navegação → Modo de gravação
+detalhada**. Ligado, cada execução passa a registrar:
+
+- O retrato estrutural da página em praticamente todo passo (não só nas falhas).
+- Exatamente **qual padrão de texto** disparou cada detecção de resultado, com um trecho do texto ao
+  redor (`result_match_detail`).
+- Quanto tempo se passou entre o clique em consultar/emitir e a detecção do resultado
+  (`outcome_timing`) — útil pra pegar falsos positivos: uma detecção em poucos milissegundos não pode
+  ser uma resposta real do servidor.
+
+Continua nunca registrando o CNPJ digitado nem o conteúdo da certidão — só estrutura da página (ids,
+seletores, texto de botão) e os trechos de texto que batem com os padrões de detecção, que são sempre
+avisos genéricos do site, não dados da consulta. Como gera bastante mais eventos que o normal, é pensado
+pra ligar só durante uma sessão de diagnóstico, não deixar sempre ativo.
+
+Foi assim, aliás, que se descobriu um bug real: o menu permanente da Caixa tem um link "Certificado de
+Regularidade do FGTS - CRF" que já bate com o padrão genérico de resultado — sem o modo detalhado, isso
+aparecia só como uma detecção suspeita rápida demais (poucos milissegundos após o clique); com ele, o log
+mostra o padrão exato e o trecho de texto que casou, apontando direto pro menu de navegação como causa
+(corrigido excluindo cabeçalho/navegação/rodapé/links do texto usado nessas detecções).
 
 ### Enviar o log para uma API própria (opcional)
 

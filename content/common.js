@@ -57,6 +57,13 @@
      certificado nenhum pra baixar. Trata como processo concluído (salva a
      tela em PDF), não como erro. */
   const RESULT_CAIXA_IMPEDIMENTO_HINTS = /imped(imento|imentos)\s+na\s+caixa\s+para\s+a\s+comprova[cç][aã]o\s+da\s+regularidade/i;
+  /* RFB: quando já existe uma certidão de Pessoa Jurídica válida emitida
+     para o CNPJ, o site mostra essa tela em vez de emitir uma nova — o
+     fluxo correto aqui não é clicar em "Emitir Nova Certidão" (like nos
+     outros resultados), e sim em "Consultar", que leva a uma tela onde é
+     preciso escolher a opção "data de validade" e um intervalo de datas
+     (ver handleRfbExistingCertidaoFlow). */
+  const RESULT_CERTIDAO_VALIDA_HINTS = /certid[aã]o\s+v[aá]lida\s+encontrada|j[aá]\s+existe\s+uma\s+certid[aã]o\s+v[aá]lida/i;
   const RESULT_CLASSIFICATION_LABEL = {
     negativa: 'Certidão Negativa (regular, sem pendências)',
     positiva_com_pendencia: 'Certidão Positiva com Efeitos de Negativa (há pendências, mas suspensas)',
@@ -65,6 +72,7 @@
     simples_nao_optante: 'CNPJ não optante pelo Simples Nacional',
     simples_optante: 'CNPJ optante pelo Simples Nacional',
     impedimento_caixa: 'Impedimento na Caixa para comprovação de regularidade (ver Conectividade Social)',
+    certidao_valida_existente: 'Certidão válida já existente (consultando por data de validade)',
   };
   /* Mensagem observada na prática: "O serviço de emissão de certidão está
      temporariamente indisponível. Tente novamente em alguns minutos." —
@@ -254,8 +262,24 @@
     return { present: false, el: null };
   }
 
+  /* document.body.innerText inclui menu, cabeçalho e rodapé — em portais
+     como o da Caixa, o próprio link de navegação permanente ("Certificado
+     de Regularidade do FGTS - CRF") já bate com o padrão genérico de
+     resultado, fazendo a extensão pensar que a consulta terminou quase
+     instantaneamente após o clique (confirmado num log real: menos de
+     10ms entre o clique e "resultado detectado", tempo insuficiente pra
+     qualquer resposta de servidor). Por isso os detectores de captcha/
+     resultado/indisponibilidade usam este texto, que exclui cabeçalho,
+     navegação, rodapé e qualquer link — o conteúdo de um resultado real
+     é sempre texto simples da página, nunca um item de menu clicável. */
+  function detectionText() {
+    const clone = document.body.cloneNode(true);
+    clone.querySelectorAll('header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"], a').forEach((el) => el.remove());
+    return clone.innerText || clone.textContent || '';
+  }
+
   function detectResult() {
-    const bodyText = document.body.innerText || '';
+    const bodyText = detectionText();
     return (
       RESULT_TEXT_HINTS.test(bodyText) ||
       RESULT_BLOCKED_HINTS.test(bodyText) ||
@@ -265,12 +289,12 @@
   }
 
   function detectTemporarilyUnavailable() {
-    const bodyText = document.body.innerText || '';
+    const bodyText = detectionText();
     return TEMP_UNAVAILABLE_HINTS.test(bodyText);
   }
 
   function detectEmailSent() {
-    const bodyText = document.body.innerText || '';
+    const bodyText = detectionText();
     return EMAIL_SENT_HINTS.test(bodyText);
   }
 
@@ -281,11 +305,12 @@
      "normais" (negativa, positiva, positiva com efeitos de negativa)
      segue o mesmo caminho de download. */
   function classifyResultText() {
-    const text = document.body.innerText || '';
+    const text = detectionText();
     /* Checa antes de RESULT_BLOCKED_HINTS: é uma resposta definitiva da
        Caixa (não um erro de consulta), então não deve virar status "erro". */
     if (RESULT_CAIXA_IMPEDIMENTO_HINTS.test(text)) return 'impedimento_caixa';
     if (RESULT_BLOCKED_HINTS.test(text)) return 'bloqueado';
+    if (RESULT_CERTIDAO_VALIDA_HINTS.test(text)) return 'certidao_valida_existente';
     if (RESULT_POSITIVA_PENDENCIA_HINTS.test(text)) return 'positiva_com_pendencia';
     if (RESULT_POSITIVA_HINTS.test(text)) return 'positiva';
     if (RESULT_NEGATIVA_HINTS.test(text)) return 'negativa';
@@ -298,11 +323,32 @@
   }
 
   function extractMatchSnippet(regex, maxLen = 220) {
-    const text = (document.body.innerText || '').replace(/\s+/g, ' ').trim();
+    const text = detectionText().replace(/\s+/g, ' ').trim();
     const match = regex.exec(text);
     if (!match) return '';
     const start = Math.max(0, match.index - 20);
     return text.slice(start, start + maxLen).trim();
+  }
+
+  /* Só usado no modo de gravação detalhada: diz qual padrão de resultado
+     bateu primeiro e um trecho do texto ao redor — pra diagnosticar casos
+     como um item de menu permanente batendo com o padrão genérico de
+     resultado (já aconteceu: "Certificado de Regularidade do FGTS - CRF"
+     no menu da Caixa), sem precisar inferir isso só pelo tempo entre os
+     eventos do log. */
+  function identifyMatchedResultHint() {
+    const text = detectionText();
+    const candidates = [
+      ['RESULT_CAIXA_IMPEDIMENTO_HINTS', RESULT_CAIXA_IMPEDIMENTO_HINTS],
+      ['RESULT_BLOCKED_HINTS', RESULT_BLOCKED_HINTS],
+      ['RESULT_CERTIDAO_VALIDA_HINTS', RESULT_CERTIDAO_VALIDA_HINTS],
+      ['RESULT_SIMPLES_OPTANTE_HINTS', RESULT_SIMPLES_OPTANTE_HINTS],
+      ['RESULT_TEXT_HINTS', RESULT_TEXT_HINTS],
+    ];
+    for (const [name, pattern] of candidates) {
+      if (pattern.test(text)) return { pattern: name, snippet: extractMatchSnippet(pattern) };
+    }
+    return null;
   }
 
   function findDownloadTrigger() {
@@ -399,14 +445,23 @@
     return { title: document.title, url: location.href, inputs, buttons, selects };
   }
 
+  /* Setado uma vez no início de runFlow() a partir de storage.local — modo
+     de gravação detalhada (Configurações → Log de navegação). Ligado, todo
+     recordDebug() passa a incluir o retrato estrutural da página (nunca
+     CNPJ nem conteúdo da certidão, só ids/seletores/textos de botão), não
+     só os eventos marcados como importantes — pra entender exatamente que
+     elementos existiam e por que a extensão tomou cada decisão. */
+  let verboseDiagnosticsEnabled = false;
+
   function recordDebug(siteKey, step, detail, snapshot) {
+    const wantsSnapshot = snapshot || verboseDiagnosticsEnabled;
     browser.runtime
       .sendMessage({
         type: 'DEBUG_LOG',
         siteKey,
         step,
         detail,
-        snapshot: snapshot ? snapshotPage() : null,
+        snapshot: wantsSnapshot ? snapshotPage() : null,
         at: Date.now(),
       })
       .catch(() => {});
@@ -543,6 +598,66 @@
     return true;
   }
 
+  function findRadioByLabelText(pattern) {
+    const labels = Array.from(document.querySelectorAll('label'));
+    const target = labels.find((l) => pattern.test(textOf(l)));
+    if (!target) return null;
+    if (target.htmlFor) {
+      const el = document.getElementById(target.htmlFor);
+      if (el) return el;
+    }
+    return target.closest('div, mat-radio-button, .form-group')?.querySelector('input[type="radio"]') || null;
+  }
+
+  /* RFB: na tela "Certidão Válida Encontrada", clica em "Consultar" (não
+     em "Emitir Nova Certidão"), escolhe a opção "data de validade" e
+     preenche o período de hoje até 90 dias à frente, depois clica em
+     "Consultar Certidão" — só então a certidão de verdade aparece pra
+     download, seguindo o fluxo normal do resto de processResult(). */
+  async function handleRfbExistingCertidaoFlow(siteKey) {
+    const consultarBtn = await waitFor(() => findButtonHeuristic([/^consultar$/i, /consultar/i]), { timeout: 8000, interval: 300 });
+    if (!consultarBtn) {
+      recordDebug(siteKey, 'certidao_valida_consultar_missing', 'Botão "Consultar" não encontrado na tela de certidão já existente.', true);
+      return false;
+    }
+    recordDebug(siteKey, 'certidao_valida_consultar_click', `"${textOf(consultarBtn)}" (${elementToSelector(consultarBtn)})`);
+    consultarBtn.click();
+
+    const radio = await waitFor(() => findRadioByLabelText(/data\s+de\s+validade/i), { timeout: 15000, interval: 400 });
+    if (!radio) {
+      recordDebug(siteKey, 'certidao_valida_radio_missing', 'Opção "data de validade" não encontrada.', true);
+      return false;
+    }
+    radio.click();
+    recordDebug(siteKey, 'certidao_valida_radio_selected', elementToSelector(radio));
+    await sleep(300);
+
+    const dataInicialInput = await waitFor(() => document.querySelector('input[name="dataInicial"]'), { timeout: 8000, interval: 300 });
+    const dataFinalInput = document.querySelector('input[name="dataFinal"]');
+    if (!dataInicialInput || !dataFinalInput) {
+      recordDebug(siteKey, 'certidao_valida_datas_missing', 'Campos de data inicial/final não encontrados.', true);
+      return false;
+    }
+
+    const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    const today = new Date();
+    const in90Days = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000);
+    setNativeValue(dataInicialInput, fmt(today));
+    setNativeValue(dataFinalInput, fmt(in90Days));
+    recordDebug(siteKey, 'certidao_valida_datas_preenchidas', `${fmt(today)} a ${fmt(in90Days)}`);
+    await sleep(300);
+
+    const consultarCertidaoBtn = await waitFor(() => findButtonHeuristic([/consultar\s+certid[aã]o/i]), { timeout: 8000, interval: 300 });
+    if (!consultarCertidaoBtn) {
+      recordDebug(siteKey, 'certidao_valida_consultar_certidao_missing', 'Botão "Consultar Certidão" não encontrado.', true);
+      return false;
+    }
+    consultarCertidaoBtn.click();
+    recordDebug(siteKey, 'certidao_valida_consultar_certidao_click', `"${textOf(consultarCertidaoBtn)}"`);
+    await sleep(500);
+    return true;
+  }
+
   /* Processa a página assim que ela mostra um resultado — usado tanto no
      fluxo normal (depois do submit) quanto quando o content script já
      inicia com o resultado na tela: alguns sites (ex.: Simples Nacional)
@@ -552,6 +667,10 @@
      pra "preencher de novo", só processar o que já está visível. */
   async function processResult(siteKey, cnpj, selectorOverrides) {
     recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
+    if (verboseDiagnosticsEnabled) {
+      const matched = identifyMatchedResultHint();
+      if (matched) recordDebug(siteKey, 'result_match_detail', `padrão=${matched.pattern} trecho="${matched.snippet}"`, true);
+    }
 
     /* Alguns estados são definitivos e não vão gerar PDF nenhum (CNPJ
        inválido, empregador não cadastrado no FGTS, etc.) — reporta como
@@ -580,6 +699,18 @@
          um sucesso normal (ver 'no_certificate' em succeedJob). */
       sendStatus(siteKey, 'concluded_without_certificate', detail);
       return;
+    }
+
+    /* Não retorna aqui: depois de completar esse sub-fluxo, a certidão de
+       verdade deve estar na tela, e o resto de processResult (procurar o
+       trigger de download etc.) segue normalmente. */
+    if (classification === 'certidao_valida_existente') {
+      recordDebug(siteKey, 'certidao_valida_encontrada', 'Certidão válida já existente — seguindo Consultar → data de validade → Consultar Certidão.', true);
+      const handled = await handleRfbExistingCertidaoFlow(siteKey);
+      if (!handled) {
+        sendStatus(siteKey, 'error', 'Certidão válida já existente, mas não foi possível seguir o fluxo de consulta por data de validade. Verifique a página ou ajuste os seletores.');
+        return;
+      }
     }
 
     sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL[classification] || null);
@@ -660,8 +791,9 @@
      usuário via background). */
   async function runFlow(siteKey, cnpj) {
     try {
+      const { selectorOverrides = {}, verboseDiagnostics } = await browser.storage.local.get(['selectorOverrides', 'verboseDiagnostics']);
+      verboseDiagnosticsEnabled = !!verboseDiagnostics;
       recordDebug(siteKey, 'start', `URL: ${location.href}`, true);
-      const { selectorOverrides = {} } = await browser.storage.local.get('selectorOverrides');
 
       /* Alguns sites (ex.: Simples Nacional) fazem um POST de formulário de
          verdade em vez de atualização via ajax — o que reinjeta o content
@@ -748,6 +880,7 @@
       recordDebug(siteKey, 'submit_found', `"${textOf(submit)}" (${elementToSelector(submit)})`);
       sendStatus(siteKey, 'submitting');
       submit.click();
+      const submittedAt = Date.now();
 
       async function waitForOutcome(timeoutMs) {
         return waitFor(() => {
@@ -759,6 +892,16 @@
       }
 
       let outcome = await waitForOutcome(15000);
+      if (verboseDiagnosticsEnabled && outcome) {
+        const matched = outcome.type === 'result' ? identifyMatchedResultHint() : null;
+        recordDebug(
+          siteKey,
+          'outcome_timing',
+          `tipo=${outcome.type} ${Date.now() - submittedAt}ms após o clique em consultar/emitir` +
+            (matched ? ` — padrão=${matched.pattern} trecho="${matched.snippet}"` : ''),
+          true
+        );
+      }
 
       if (outcome && outcome.type === 'captcha') {
         recordDebug(siteKey, 'captcha_detected', 'Captcha visível após o envio.');

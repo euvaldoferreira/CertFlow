@@ -225,6 +225,17 @@ aparecia só como uma detecção suspeita rápida demais (poucos milissegundos a
 mostra o padrão exato e o trecho de texto que casou, apontando direto pro menu de navegação como causa
 (corrigido excluindo cabeçalho/navegação/rodapé/links do texto usado nessas detecções).
 
+Mesmo depois desse ajuste, a Receita Federal continuava "detectando resultado" entre 6 e 34ms após o
+clique em "Emitir Certidão" (confirmado em log real, incluindo depois da correção acima) — tempo
+impossível para qualquer resposta do servidor, então era outro trecho de texto (fora de header/nav/
+footer/links) já presente na própria página antes do clique. Isso fazia a classificação do resultado
+rodar sempre em cima da página antiga, nunca dando chance da tela real (ex.: "Certidão Válida
+Encontrada") aparecer antes — por isso a extensão nunca seguia o fluxo correto para certidão já
+existente, e só salvava a tela em PDF bem mais tarde, quando o timeout do passo de emissão expirava e a
+tela real por coincidência já estava visível. Corrigido ignorando qualquer detecção de captcha/resultado/
+indisponibilidade nos primeiros ~700ms após o clique — tempo de processamento client-side real (Angular/
+JSF) é sempre maior que isso.
+
 ### Enviar o log para uma API própria (opcional)
 
 A pasta [`api/`](api/) tem uma API local (Node/Express, containerizada) que recebe esses eventos por

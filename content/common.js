@@ -882,8 +882,20 @@
       submit.click();
       const submittedAt = Date.now();
 
+      /* Confirmado em logs reais: mesmo excluindo header/nav/footer/links do
+         texto (ver detectionText), a Receita Federal ainda "detecta
+         resultado" entre 6 e 34ms depois do clique — tempo impossível para
+         qualquer resposta real. É a página antiga ainda na tela, não o
+         resultado da consulta. Isso fazia a classificação rodar cedo
+         demais (sempre "regular" genérico, nunca a tela real de "Certidão
+         Válida Encontrada"), impedindo o fluxo correto de sequer começar.
+         Ignora qualquer detecção nos primeiros instantes — tempo real de
+         processamento client-side (Angular/JSF) é sempre maior que isso. */
+      const MIN_OUTCOME_DELAY_MS = 700;
       async function waitForOutcome(timeoutMs) {
+        const pollStartedAt = Date.now();
         return waitFor(() => {
+          if (Date.now() - pollStartedAt < MIN_OUTCOME_DELAY_MS) return null;
           if (detectCaptcha().present) return { type: 'captcha' };
           if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
           if (detectResult()) return { type: 'result' };

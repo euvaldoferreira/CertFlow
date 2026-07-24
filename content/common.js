@@ -735,6 +735,15 @@
   const CERTIDOES_LIST_HINTS = /rela[cç][aã]o\s+das\s+certid[oõ]es\s+emitidas\s+por\s+data\s+de\s+validade/i;
   const SEGUNDA_VIA_HINTS = /segunda\s*via|2\s*[ªa]\s*via/i;
   const VALIDA_STATUS_HINTS = /\bv[aá]lida\b/i;
+  /* Duas variantes de propósito — nunca reaproveitar a mesma instância com
+     flag /g entre .test() e matchAll(): um regex global mantém lastIndex
+     entre chamadas de .test(), e reusar o MESMO objeto pra checar strings
+     diferentes faz ele "lembrar" uma posição da string anterior, dando
+     falso-negativo de forma imprevisível (bug real encontrado em log: a
+     linha era achada, mas a extração de data falhava do nada). Por isso
+     a checagem booleana usa uma versão SEM /g, e só a extração via
+     matchAll (que não sofre desse problema) usa a versão global. */
+  const BR_DATE_TEST = /\d{2}\/\d{2}\/\d{4}/;
   const BR_DATE_PATTERN = /(\d{2})\/(\d{2})\/(\d{4})/g;
 
   /* "Consultar Certidão" (com data de validade) devolve uma LISTA de
@@ -760,7 +769,7 @@
     for (const node of validaNodes) {
       let ancestor = node;
       for (let depth = 0; ancestor && depth < 6; depth++) {
-        if (BR_DATE_PATTERN.test(textOf(ancestor))) {
+        if (BR_DATE_TEST.test(textOf(ancestor))) {
           candidates.add(ancestor);
           break;
         }

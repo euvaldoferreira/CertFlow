@@ -201,6 +201,7 @@ async function startJob(siteKey, makeActive) {
   const site = SITES[siteKey];
   const job = currentRun.jobs[siteKey];
   job.status = 'running';
+  job.startedAt = Date.now();
 
   if (site.mode === 'manual') {
     addLog(`${site.label}: essa certidão exige login — abrindo a aba para você concluir manualmente. Feche a aba quando terminar.`, 'warn');
@@ -406,12 +407,44 @@ async function handleDownloadBlob(msg) {
 
   try {
     const downloadId = await browser.downloads.download({ url, filename, saveAs: false, conflictAction: 'uniquify' });
+    selfInitiatedDownloadIds.add(downloadId);
     const { history = [] } = await browser.storage.local.get('history');
     history.unshift({ cnpj, siteKey, filename, downloadId, at: Date.now() });
     await browser.storage.local.set({ history: history.slice(0, 100) });
     addLog(`${SITES[siteKey].label}: arquivo salvo em "${filename}".`, 'success');
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+}
+
+/* Alguns sites (ex.: "Segunda Via" da RFB) disparam um download nativo do
+   próprio navegador — o servidor responde com Content-Disposition:
+   attachment ou similar, sem nenhum link/blob visível no DOM pro content
+   script capturar. Sem isso, a extensão não tinha como saber que o
+   arquivo já foi salvo pelo próprio navegador, e caía no fallback de
+   imprimir a TELA (gerando um PDF errado, além do PDF real já baixado). */
+const selfInitiatedDownloadIds = new Set();
+
+function siteHostname(siteKey) {
+  try {
+    return new URL(SITES[siteKey].url).hostname;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function hasNativeDownloadForSite(siteKey, sinceMs) {
+  try {
+    const hostname = siteHostname(siteKey);
+    if (!hostname) return false;
+    const results = await browser.downloads.search({ startedAfter: new Date(sinceMs).toISOString() });
+    return results.some((d) => {
+      if (selfInitiatedDownloadIds.has(d.id)) return false;
+      const ref = `${d.referrer || ''} ${d.url || ''}`;
+      return ref.includes(hostname);
+    });
+  } catch (err) {
+    return false;
   }
 }
 
@@ -497,10 +530,21 @@ async function handleCsStatus(msg, sender) {
     case 'downloaded':
       succeedJob(msg.siteKey);
       break;
-    case 'manual_save_needed':
-      await attemptSaveAsPdf(job.tabId, msg.siteKey);
+    case 'manual_save_needed': {
+      /* Antes de cair no fallback de imprimir a TELA, confere se o próprio
+         site já disparou um download nativo do navegador (comum quando o
+         servidor responde com Content-Disposition: attachment — não deixa
+         rastro nenhum no DOM pro content script ver). Se já baixou, o
+         arquivo real já está salvo; não faz sentido salvar a tela também. */
+      const nativeDownload = await hasNativeDownloadForSite(msg.siteKey, job.startedAt || currentRun.startedAt);
+      if (nativeDownload) {
+        addLog(`${site.label}: o próprio site já iniciou o download do PDF — não é preciso salvar a tela.`, 'success');
+      } else {
+        await attemptSaveAsPdf(job.tabId, msg.siteKey);
+      }
       succeedJob(msg.siteKey);
       break;
+    }
     case 'concluded_without_certificate':
       addLog(`${site.label}: processo concluído, mas não há certidão para extrair${msg.detail ? ' — ' + msg.detail : ''}. Salvando a tela.`, 'warn');
       await attemptSaveAsPdf(job.tabId, msg.siteKey);

@@ -352,8 +352,11 @@ aviso no log) — nunca trava o fluxo.
 `Downloads/<pasta configurada>/<CNPJ sem máscara>/<site>_<timestamp>.pdf`. A pasta padrão é `CertFlow`
 e pode ser alterada na página de Configurações.
 
-Quando o site não expõe um link de PDF direto (algumas certidões são páginas HTML pensadas para
-impressão), o comportamento depende do navegador:
+Quando o site não expõe um link de PDF nem um blob visível no DOM, a extensão primeiro confere se o
+próprio navegador já iniciou um download nativo (via `browser.downloads.search`, comparando o host do
+download com o do site) — comum quando o servidor responde com `Content-Disposition: attachment` sem
+deixar rastro nenhum na página (ex.: "Segunda Via" na RFB). Se já baixou, não faz nada além disso; só cai
+no fallback abaixo se realmente não detectar nenhum download:
 
 - **Firefox**: a extensão aciona o diálogo nativo "Salvar como PDF" — um clique extra para confirmar o
   local de salvamento (o Firefox não permite que extensões gravem arquivos arbitrários sem esse gesto).

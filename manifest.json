@@ -18,8 +18,7 @@
     "tabs",
     "contextMenus",
     "notifications",
-    "alarms",
-    "system.display"
+    "alarms"
   ],
   "host_permissions": [
     "https://servicos.receitafederal.gov.br/*",

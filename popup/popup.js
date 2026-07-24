@@ -41,6 +41,17 @@
     Object.entries(stepEls).forEach(([site, el]) => {
       el.classList.remove('active', 'done', 'error');
       if (!run) return;
+
+      const result = run.siteResults?.[site];
+      if (result === 'success') {
+        el.classList.add('done');
+        return;
+      }
+      if (result === 'error') {
+        el.classList.add('error');
+        return;
+      }
+
       const idx = run.order.indexOf(site);
       if (idx < run.index) el.classList.add('done');
       else if (idx === run.index && run.status === 'running') el.classList.add('active');

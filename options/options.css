@@ -35,7 +35,7 @@ header h1 { font-size: 18px; margin: 0; }
 
 .intro { color: var(--muted); font-size: 13px; }
 
-section.site-config, section.folder-config, section.history {
+section.site-config, section.folder-config, section.history, section.debug-log, section.ai-suggestions {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -44,6 +44,15 @@ section.site-config, section.folder-config, section.history {
 }
 
 h2 { font-size: 14px; margin: 0 0 10px; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+
+code {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--border);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
 
 .field-row {
   display: grid;
@@ -104,3 +113,45 @@ th { color: var(--muted); font-weight: 600; }
 #debug-log-preview li .time { color: var(--muted); margin-right: 6px; }
 
 .actions-row { display: flex; gap: 8px; margin-top: 10px; }
+
+.checkbox-row { grid-template-columns: 1fr auto; }
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; justify-self: end; }
+
+#api-status.ok { color: var(--green-light); }
+#api-status.error { color: #c0392b; }
+
+.ai-site-block {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 14px;
+}
+.ai-site-block h3 { font-size: 13px; margin: 0 0 4px; color: var(--fg); text-transform: none; letter-spacing: 0; }
+.ai-summary { margin-bottom: 8px; }
+
+.ai-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 12px;
+}
+.ai-field-row:last-child { border-bottom: none; }
+.ai-field-row .ai-field-name { width: 130px; flex-shrink: 0; color: var(--muted); }
+.ai-field-row .ai-field-value {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ai-field-row .ai-field-value.empty { color: var(--muted); font-style: italic; }
+.ai-field-row .apply-field-btn { flex-shrink: 0; background: var(--green); border-color: var(--green); color: #fff; }
+.ai-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #6b8afd;
+  color: #fff;
+  margin-left: 6px;
+}

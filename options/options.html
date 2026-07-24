@@ -109,10 +109,71 @@
     <ul id="debug-log-preview"></ul>
     <div class="actions-row">
       <button id="download-log-btn" type="button">Baixar log (.json)</button>
+      <button id="send-log-now-btn" type="button">Enviar agora para a API</button>
       <button id="clear-log-btn" type="button">Limpar log</button>
+    </div>
+
+    <h3>Envio para API própria</h3>
+    <p class="intro">
+      Se você roda a <code>certflow-api</code> localmente (ver pasta <code>api/</code> do projeto), a
+      extensão pode enviar cada evento do log automaticamente assim que ele acontece — útil para
+      acompanhar em tempo real sem precisar baixar o JSON manualmente.
+    </p>
+    <div class="field-row">
+      <label>URL da API</label>
+      <input type="text" id="api-url" placeholder="https://api-certflow.ecolmea.com/api/logs" />
+    </div>
+    <div class="field-row">
+      <label>Chave (API key)</label>
+      <input type="password" id="api-key" placeholder="Bearer token configurado no servidor" />
+    </div>
+    <div class="field-row checkbox-row">
+      <label for="api-auto-send">Enviar automaticamente a cada evento</label>
+      <input type="checkbox" id="api-auto-send" />
+    </div>
+    <div class="actions-row">
+      <button id="save-api-btn" type="button">Salvar configuração da API</button>
+    </div>
+    <p id="api-status" class="tab-hint"></p>
+  </section>
+
+  <section class="ai-suggestions">
+    <h2>Sugestões de seletor por IA</h2>
+    <p class="intro">
+      A <code>certflow-api</code> pode usar o Claude para ler o retrato da página (ids, textos de
+      botão, seletores — nunca o CNPJ nem o conteúdo da certidão) e sugerir qual seletor usar em cada
+      campo, escolhendo sempre entre os elementos que a extensão já viu de verdade na página. A IA
+      nunca gera nem executa código — só sugere um valor de configuração, do mesmo tipo que você
+      preenche manualmente em "Selecionar na página" acima.
+    </p>
+    <div class="field-row checkbox-row">
+      <label for="ai-auto-apply">Preencher automaticamente campos que estão sem configuração</label>
+      <input type="checkbox" id="ai-auto-apply" />
+    </div>
+    <p class="tab-hint">
+      Só se aplica a campos totalmente vazios — nunca substitui um seletor manual ou uma sugestão já
+      aceita antes. Para os demais campos, revise a sugestão abaixo e clique em "Aplicar" você mesmo.
+    </p>
+    <div class="actions-row">
+      <button id="save-ai-btn" type="button">Salvar</button>
+    </div>
+
+    <div class="ai-site-block" data-site="rfb">
+      <h3>Receita Federal</h3>
+      <p class="ai-summary tab-hint" data-ai-summary="rfb"></p>
+      <div class="ai-fields" data-ai-fields="rfb"></div>
+      <button class="analyze-btn" type="button" data-site="rfb">Verificar agora (chama a IA)</button>
+    </div>
+
+    <div class="ai-site-block" data-site="caixa">
+      <h3>Caixa (FGTS)</h3>
+      <p class="ai-summary tab-hint" data-ai-summary="caixa"></p>
+      <div class="ai-fields" data-ai-fields="caixa"></div>
+      <button class="analyze-btn" type="button" data-site="caixa">Verificar agora (chama a IA)</button>
     </div>
   </section>
 
+  <script src="../lib/browser-shim.js"></script>
   <script src="../lib/cnpj.js"></script>
   <script src="options.js"></script>
 </body>

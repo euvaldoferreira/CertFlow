@@ -1,0 +1,24 @@
+services:
+  certflow-api:
+    build: .
+    image: certflow-api:local
+    container_name: certflow-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - API_KEY=${API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - lakehouse_frontend
+
+networks:
+  # Rede onde o container do cloudflared (lakehouse-cloudflared) já está —
+  # sem isso o túnel não consegue resolver/alcançar este serviço, já que
+  # containers em redes bridge diferentes não se enxergam por padrão.
+  lakehouse_frontend:
+    external: true
+    name: lakehouse_frontend

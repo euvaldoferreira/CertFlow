@@ -21,7 +21,12 @@
      campos/botões que estejam dentro de um bloco assim marcado. */
   const EXCLUDE_CONTEXT_HINTS = /autenticidade|n[uú]mero de controle|certid[aã]o j[aá] emitida|validar certid[aã]o|consultar certid[aã]o emitida/i;
   const CAPTCHA_HINTS = /recaptcha|hcaptcha|h-captcha|g-recaptcha|captcha/i;
-  const RESULT_TEXT_HINTS = /certid[aã]o emitida|situa[cç][aã]o regular|regular perante|certificado de regularidade|v[aá]lida at[eé]|n[uú]mero da certid[aã]o|n[uú]mero do certificado/i;
+  const RESULT_TEXT_HINTS = /certid[aã]o emitida|situa[cç][aã]o regular|regular perante|certificado de regularidade|v[aá]lida at[eé]|n[uú]mero da certid[aã]o|n[uú]mero do certificado|certid[aã]o v[aá]lida encontrada|j[aá] existe uma certid[aã]o v[aá]lida/i;
+  /* Mensagem observada na prática: "O serviço de emissão de certidão está
+     temporariamente indisponível. Tente novamente em alguns minutos." —
+     não é captcha nem resultado, é uma falha transitória do próprio site
+     que vale a pena tentar de novo automaticamente em vez de desistir. */
+  const TEMP_UNAVAILABLE_HINTS = /temporariamente indispon[ií]vel|servi[cç]o.{0,30}indispon[ií]vel|indispon[ií]vel.{0,30}moment|tente novamente (mais tarde|em alguns minutos)|sistema (est[aá] )?fora do ar|erro (interno|inesperado) do servidor|falha ao processar/i;
   const DOWNLOAD_TEXT_HINTS = /baixar|salvar|download|imprimir|gerar pdf|visualizar certid[aã]o|visualizar certificado/i;
 
   function sleep(ms) {
@@ -160,6 +165,19 @@
   function detectResult() {
     const bodyText = document.body.innerText || '';
     return RESULT_TEXT_HINTS.test(bodyText);
+  }
+
+  function detectTemporarilyUnavailable() {
+    const bodyText = document.body.innerText || '';
+    return TEMP_UNAVAILABLE_HINTS.test(bodyText);
+  }
+
+  function extractMatchSnippet(regex, maxLen = 220) {
+    const text = (document.body.innerText || '').replace(/\s+/g, ' ').trim();
+    const match = regex.exec(text);
+    if (!match) return '';
+    const start = Math.max(0, match.index - 20);
+    return text.slice(start, start + maxLen).trim();
   }
 
   function findDownloadTrigger() {
@@ -366,33 +384,65 @@
       sendStatus(siteKey, 'submitting');
       submit.click();
 
-      const captchaCheck = await waitFor(() => {
-        const captcha = detectCaptcha();
-        if (captcha.present) return { type: 'captcha' };
-        if (detectResult()) return { type: 'result' };
-        return null;
-      }, { timeout: 15000, interval: 400 });
+      async function waitForOutcome(timeoutMs) {
+        return waitFor(() => {
+          if (detectCaptcha().present) return { type: 'captcha' };
+          if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
+          if (detectResult()) return { type: 'result' };
+          return null;
+        }, { timeout: timeoutMs, interval: 400 });
+      }
 
-      if (captchaCheck && captchaCheck.type === 'captcha') {
+      function reportUnavailable(overrideDetail) {
+        const detail = overrideDetail || extractMatchSnippet(TEMP_UNAVAILABLE_HINTS) || 'Serviço indisponível no momento.';
+        recordDebug(siteKey, 'temporarily_unavailable', detail, true);
+        sendStatus(siteKey, 'temporarily_unavailable', detail);
+      }
+
+      let outcome = await waitForOutcome(15000);
+
+      if (outcome && outcome.type === 'captcha') {
         recordDebug(siteKey, 'captcha_detected', 'Captcha visível após o envio.');
         sendStatus(siteKey, 'captcha');
-        const resolved = await waitFor(() => detectResult(), { timeout: 300000, interval: 800 });
-        if (!resolved) {
+        outcome = await waitForOutcome(300000);
+        if (!outcome) {
           recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após resolução do captcha (5 min).', true);
           sendStatus(siteKey, 'error', 'Tempo esgotado aguardando a resolução do captcha.');
           return;
         }
-      } else if (!captchaCheck) {
-        const resolvedLate = await waitFor(() => detectResult(), { timeout: 15000, interval: 500 });
-        if (!resolvedLate) {
-          recordDebug(siteKey, 'result_missing', 'Nenhum texto de resultado reconhecido após o envio.', true);
-          sendStatus(siteKey, 'error', 'A página não retornou um resultado reconhecível. Verifique o CNPJ ou ajuste os seletores.');
+      }
+
+      if (outcome && outcome.type === 'unavailable') {
+        reportUnavailable();
+        return;
+      }
+
+      if (!outcome) {
+        const verdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
+        if (verdict && verdict.status === 'indisponivel_temporario') {
+          reportUnavailable(verdict.resumo);
           return;
         }
+        recordDebug(siteKey, 'result_missing', 'Nenhum texto de resultado reconhecido após o envio.', true);
+        sendStatus(siteKey, 'error', verdict?.resumo || 'A página não retornou um resultado reconhecível. Verifique o CNPJ ou ajuste os seletores.');
+        return;
       }
 
       recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
       sendStatus(siteKey, 'result_ready');
+
+      /* O Gemini Nano (quando disponível, só no Chrome) lê o texto visível
+         da página e classifica se a certidão saiu regular, com pendências,
+         ou se o "resultado" é na real uma falha temporária do site — isso
+         complementa a heurística de regex, que só reconhece frases exatas. */
+      const resultVerdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
+      if (resultVerdict) {
+        if (resultVerdict.status === 'indisponivel_temporario') {
+          reportUnavailable(resultVerdict.resumo);
+          return;
+        }
+        sendStatus(siteKey, 'ai_verdict', resultVerdict);
+      }
       await sleep(500);
 
       /* Alguns desses portais mostram a "situação" numa primeira consulta e
@@ -453,6 +503,8 @@
     findButtonHeuristic,
     detectCaptcha,
     detectResult,
+    detectTemporarilyUnavailable,
+    extractMatchSnippet,
     findDownloadTrigger,
     elementToSelector,
     resolveElement,

@@ -81,6 +81,7 @@ button {
 #log-list li.warn { color: var(--amber); }
 #log-list li.error { color: var(--red); }
 #log-list li.success { color: var(--green-light); }
+#log-list li.ai { color: #6b8afd; }
 
 footer { margin-top: 12px; text-align: center; }
 footer a { font-size: 11px; color: var(--muted); text-decoration: none; }

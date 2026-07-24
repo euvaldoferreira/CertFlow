@@ -1,0 +1,13 @@
+# API local
+api/node_modules/
+api/.env
+api/data/
+
+# Build da extensão (gerado por scripts/build.sh)
+dist-firefox/
+dist-chrome/
+
+# Editor / SO
+.DS_Store
+*.swp
+web-ext-artifacts/

@@ -391,13 +391,24 @@ async function attemptSaveAsPdf(tabId, siteKey) {
   }
 }
 
-async function handleDownloadBlob(msg) {
-  const { siteKey, cnpj, dataBase64, mime } = msg;
+/* <pasta configurada>/<data>_<hora>_<CNPJ>_<nome da certidão>.<ext> — sem
+   subpastas por CNPJ/data, tudo dentro de uma pasta só (a "pasta
+   configurada", padrão "CertFlow"); a raiz de tudo isso é sempre a pasta
+   de downloads que o usuário configurou no navegador — a API de
+   downloads não permite escolher um caminho fora dela. */
+async function buildCertidaoFilename(siteKey, cnpj, ext) {
   const { downloadFolder } = await browser.storage.local.get('downloadFolder');
   const folder = downloadFolder || 'CertFlow';
+  const now = new Date();
+  const datePart = now.toISOString().slice(0, 10);
+  const timePart = now.toTimeString().slice(0, 8).replace(/:/g, '-');
+  return `${folder}/${datePart}_${timePart}_${cnpj}_${SITES[siteKey].fileTag}.${ext}`;
+}
+
+async function handleDownloadBlob(msg) {
+  const { siteKey, cnpj, dataBase64, mime } = msg;
   const ext = mime && mime.includes('pdf') ? 'pdf' : 'html';
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `${folder}/${cnpj}/${SITES[siteKey].fileTag}_${timestamp}.${ext}`;
+  const filename = await buildCertidaoFilename(siteKey, cnpj, ext);
 
   const byteChars = atob(dataBase64);
   const bytes = new Uint8Array(byteChars.length);
@@ -461,6 +472,53 @@ async function waitForNativeDownload(siteKey, sinceMs, { timeout = 10000, interv
   }
   return false;
 }
+
+/* A pasta configurada em Configurações (downloadFolder) só era aplicada
+   pra downloads que a PRÓPRIA extensão iniciava (handleDownloadBlob) —
+   downloads nativos disparados pelo site (ex.: "Segunda Via", "Emitir
+   Nova Certidão" quando o servidor responde com Content-Disposition:
+   attachment) iam pro nome/local padrão do navegador, ignorando a
+   configuração por completo (reportado por um usuário). onDeterminingFilename
+   intercepta QUALQUER download (nativo ou não) antes de ele ser salvo,
+   permitindo sugerir um nome/caminho novo — usado aqui pra redirecionar
+   também os downloads nativos pra mesma pasta/convenção de nome. */
+browser.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+  /* Nunca reprocessa os que a própria extensão já iniciou (já vieram com
+     o nome certo de handleDownloadBlob) — checa tanto pelo id quanto pelo
+     esquema da URL blob:, que só a extensão usa (belt-and-suspenders,
+     dado que o id pode não estar no Set ainda por uma corrida de timing). */
+  const isOwnBlob = /^blob:(moz|chrome)-extension:\/\//.test(downloadItem.url || '');
+  if (selfInitiatedDownloadIds.has(downloadItem.id) || isOwnBlob) return false;
+  if (!currentRun) return false;
+
+  const matchEntry = Object.entries(currentRun.jobs).find(([siteKey, job]) => {
+    if (job.status !== 'running') return false;
+    const hostname = siteHostname(siteKey);
+    if (!hostname) return false;
+    const ref = `${downloadItem.referrer || ''} ${downloadItem.url || ''}`;
+    return ref.includes(hostname);
+  });
+  if (!matchEntry) return false;
+  const [siteKey] = matchEntry;
+  const cnpj = currentRun.cnpj;
+
+  (async () => {
+    const originalName = downloadItem.filename || 'certidao.pdf';
+    const extMatch = /\.([a-zA-Z0-9]+)$/.exec(originalName);
+    const ext = extMatch ? extMatch[1] : 'pdf';
+    const filename = await buildCertidaoFilename(siteKey, cnpj, ext);
+    try {
+      suggest({ filename, conflictAction: 'uniquify' });
+      const { history = [] } = await browser.storage.local.get('history');
+      history.unshift({ cnpj, siteKey, filename, downloadId: downloadItem.id, at: Date.now() });
+      await browser.storage.local.set({ history: history.slice(0, 100) });
+    } catch (err) {
+      /* Se o navegador já rejeitou por algum motivo, deixa seguir com o
+         nome padrão em vez de travar o download inteiro. */
+    }
+  })();
+  return true; // sinaliza que suggest() será chamado de forma assíncrona
+});
 
 async function sendLogToApi(events, source) {
   const { apiUrl, apiKey, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiKey', 'apiAutoSend']);

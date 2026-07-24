@@ -372,8 +372,17 @@ aviso no log) — nunca trava o fluxo.
 
 ## Onde os arquivos são salvos
 
-`Downloads/<pasta configurada>/<CNPJ sem máscara>/<site>_<timestamp>.pdf`. A pasta padrão é `CertFlow`
-e pode ser alterada na página de Configurações.
+`<pasta de downloads do navegador>/<pasta configurada>/<data>_<hora>_<CNPJ sem máscara>_<nome da
+certidão>.pdf` — sem subpastas por CNPJ ou data, tudo dentro de uma pasta só (a "pasta configurada",
+padrão `CertFlow`, ajustável na página de Configurações). A raiz é sempre a pasta de downloads
+configurada no próprio navegador — a API de downloads não permite escolher um caminho fora dela.
+
+Essa estrutura vale tanto para os PDFs que a extensão baixa ela mesma quanto para downloads **nativos**
+disparados pelo próprio site (ex.: "Segunda Via"/"Emitir Nova Certidão" na RFB, quando o servidor responde
+direto com o arquivo): a extensão usa `browser.downloads.onDeterminingFilename` pra interceptar qualquer
+download que corresponda a um site em execução e sugerir o nome/pasta configurados antes de ele ser
+salvo, em vez de deixar cair no nome/local padrão do navegador (que ignorava essa configuração por
+completo).
 
 Quando o site não expõe um link de PDF nem um blob visível no DOM, a extensão primeiro confere se o
 próprio navegador já iniciou (ou está prestes a iniciar) um download nativo (via `browser.downloads.search`,

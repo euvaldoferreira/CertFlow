@@ -117,11 +117,13 @@ usando a posição do `dataFinal` como referência.
 
 "Consultar Certidão" não abre a certidão direto — devolve uma **lista** ("Relação das certidões emitidas
 por data de validade"), cada linha com uma situação (válida/inválida) e um botão "Segunda Via" que gera o
-PDF daquela linha especificamente. A extensão escolhe a linha com situação "válida" e a data de validade
-mais distante (a que fica valendo por mais tempo) e clica em "Segunda Via" dela — sem isso, caía no
-fallback de salvar a lista inteira em PDF, que não é a certidão. Essa parte ainda não foi confirmada por
-um teste ao vivo (só implementada com base na descrição da tela, sem um snapshot real da tabela) — se a
-extensão não achar a lista ou a linha certa, o log de navegação mostra exatamente em qual passo parou.
+PDF daquela linha especificamente. A extensão acha a tela (confirmado em log real) e procura a "linha" da
+certidão de forma flexível — não assume que é um `<tr>` de tabela HTML de verdade, sobe a partir de onde
+o texto "válida" aparece até achar o menor ancestral que também contenha uma data — escolhe a de validade
+mais distante e clica em "Segunda Via" dela (procurando também no elemento pai, caso o botão fique fora
+do limite identificado como "linha"). Ainda em ajuste: a primeira tentativa achou a tela mas não a
+estrutura exata das linhas; se falhar, o log mostra as ocorrências soltas de "válida" encontradas, pra
+ajustar a busca sem precisar adivinhar a estrutura de novo.
 
 Essa busca demorou algumas rodadas de diagnóstico pra acertar: por várias tentativas os campos "não eram
 achados" mesmo esperando bastante, até que a instrumentação revelou a causa real — não era demora nem

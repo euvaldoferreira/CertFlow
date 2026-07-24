@@ -746,6 +746,34 @@
      processResult() (busca normal de download) assumir a partir daí —
      sem isso, a extensão caía no fallback de salvar a lista inteira em
      PDF, o que não é a certidão de verdade. */
+  /* Acha o menor elemento que contém tanto "válida" quanto uma data — não
+     assume que a "linha" é necessariamente um <tr> (a RFB pode usar
+     divs/list items em vez de tabela HTML de verdade). Sobe da ocorrência
+     de "válida" procurando um ancestral que também contenha uma data,
+     preferindo o menor (mais específico) possível. */
+  function findRowLikeCandidates() {
+    const validaNodes = Array.from(document.querySelectorAll('body *')).filter((el) => {
+      if (el.children.length > 0 && Array.from(el.children).some((c) => VALIDA_STATUS_HINTS.test(textOf(c)))) return false;
+      return VALIDA_STATUS_HINTS.test(textOf(el));
+    });
+    const candidates = new Set();
+    for (const node of validaNodes) {
+      let ancestor = node;
+      for (let depth = 0; ancestor && depth < 6; depth++) {
+        if (BR_DATE_PATTERN.test(textOf(ancestor))) {
+          candidates.add(ancestor);
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+    }
+    /* Entre os candidatos (podem ser aninhados uns nos outros), fica só
+       com os mais específicos — descarta qualquer um que seja ancestral
+       de outro candidato já coletado. */
+    const list = Array.from(candidates);
+    return list.filter((el) => !list.some((other) => other !== el && el.contains(other)));
+  }
+
   async function handleRfbCertidoesListFlow(siteKey) {
     const found = await waitFor(() => (CERTIDOES_LIST_HINTS.test(document.body.innerText || '') ? true : null), {
       timeout: 15000,
@@ -756,12 +784,24 @@
       return true;
     }
 
-    const rows = Array.from(document.querySelectorAll('tr')).filter((row) => {
-      const text = textOf(row);
-      return VALIDA_STATUS_HINTS.test(text) && BR_DATE_PATTERN.test(text);
-    });
+    /* Espera as linhas aparecerem (podem renderizar um instante depois do
+       cabeçalho da lista) em vez de checar só uma vez. */
+    const rows = await waitFor(() => {
+      const found2 = findRowLikeCandidates();
+      return found2.length ? found2 : null;
+    }, { timeout: 15000, interval: 400 }) || [];
     if (!rows.length) {
-      recordDebug(siteKey, 'certidoes_lista_rows_missing', 'Nenhuma linha com situação "válida" e data encontrada na lista.', true);
+      const diag = Array.from(document.querySelectorAll('body *'))
+        .filter((el) => el.children.length === 0 && VALIDA_STATUS_HINTS.test(textOf(el)))
+        .slice(0, 10)
+        .map((el) => `<${el.tagName.toLowerCase()}> "${textOf(el).slice(0, 60)}" (${elementToSelector(el)})`)
+        .join(' | ');
+      recordDebug(
+        siteKey,
+        'certidoes_lista_rows_missing',
+        `Nenhuma linha com situação "válida" e data encontrada. Ocorrências soltas de "válida": ${diag || 'nenhuma'}`,
+        true
+      );
       return false;
     }
 
@@ -782,11 +822,19 @@
       return false;
     }
 
-    const segundaViaBtn = Array.from(bestRow.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).find((el) =>
-      SEGUNDA_VIA_HINTS.test(textOf(el))
-    );
+    /* Se o botão não estiver dentro do próprio elemento identificado como
+       "linha", tenta no elemento pai — o limite exato da linha pode não
+       bater exatamente com onde o botão de ação realmente está aninhado. */
+    const findSegundaVia = (scope) =>
+      Array.from(scope.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).find((el) => SEGUNDA_VIA_HINTS.test(textOf(el)));
+    const segundaViaBtn = findSegundaVia(bestRow) || (bestRow.parentElement ? findSegundaVia(bestRow.parentElement) : null);
     if (!segundaViaBtn) {
-      recordDebug(siteKey, 'certidoes_segunda_via_missing', 'Botão "Segunda Via" não encontrado na linha escolhida.', true);
+      recordDebug(
+        siteKey,
+        'certidoes_segunda_via_missing',
+        `Botão "Segunda Via" não encontrado na linha escolhida (${elementToSelector(bestRow)}) nem no elemento pai.`,
+        true
+      );
       return false;
     }
 

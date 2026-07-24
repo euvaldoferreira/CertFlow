@@ -555,12 +555,17 @@ async function handleCsStatus(msg, sender) {
       break;
     case 'restart_for_emit_new':
       /* A certidão existente não atendia à validade mínima configurada —
-         recarrega a aba pra refazer o fluxo do zero, dessa vez indo direto
-         para "Emitir Nova Certidão" (o flag sobrevive ao reload porque
+         volta pra URL inicial conhecida (não um simples reload: a aba
+         está numa rota profunda do fluxo — ex.: .../cnpj/consultar/resultado
+         — e recarregar essa mesma URL faz o Angular cair numa tela de
+         "escolher tipo de certidão" em vez de restaurar o estado, porque
+         a SPA depende de navegação client-side, não de um load direto
+         nessa rota) e refaz o fluxo do zero, dessa vez indo direto para
+         "Emitir Nova Certidão" (o flag sobrevive à navegação porque
          currentRun.jobs vive no background, não na aba). */
       job.forceEmitNew = true;
       addLog(`${site.label}: certidão existente não atende à validade mínima configurada — emitindo uma nova.`, 'warn');
-      await browser.tabs.reload(job.tabId).catch(() => {});
+      await browser.tabs.update(job.tabId, { url: site.url }).catch(() => {});
       break;
     default:
       break;

@@ -115,8 +115,11 @@ emitir:
   sempre clica em "Emitir Nova Certidão", mesmo que já exista uma válida.
 - **"Validade mínima restante (dias)"** (30 por padrão): mesmo com o reaproveitamento ligado, a extensão
   só reaproveita se a certidão encontrada ainda for válida por pelo menos esse número de dias. Se não for
-  (ou se nenhuma certidão "válida" for encontrada na lista), ela recarrega a aba e refaz o fluxo do zero,
-  dessa vez indo direto para "Emitir Nova Certidão".
+  (ou se nenhuma certidão "válida" for encontrada na lista), ela navega de volta para a URL inicial do
+  serviço e refaz o fluxo do zero, dessa vez indo direto para "Emitir Nova Certidão" — não é um simples
+  reload: a aba está numa rota profunda do fluxo (ex.: `.../cnpj/consultar/resultado`), e recarregar essa
+  mesma URL faz a SPA cair numa tela de "escolher tipo de certidão" em vez de restaurar o estado (a
+  navegação depende do roteamento client-side do Angular, não de um load direto nessa rota).
 
 Quando o reaproveitamento é tentado, o fluxo é: clica em "Consultar" (não em "Emitir Nova Certidão"),
 escolhe a opção "data de validade" na tela seguinte (clicando na label, não só no `<input type="radio">`

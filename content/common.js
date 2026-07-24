@@ -15,10 +15,13 @@
     /consultar/i,
     /pesquisar|buscar|verificar/i,
   ];
-  /* "Obter Certificado" é o texto real do botão nessa etapa no site da
-     Caixa — sem isso a extensão parava exatamente aí, sem completar o
-     fluxo. Também cobre variantes tipo "Confirmar emissão". */
-  const EMIT_STEP_TEXT_HINTS = /emitir\s*(a\s*)?(nova\s*)?certid[aã]o|gerar\s*(a\s*)?(nova\s*)?certid[aã]o|emitir\s*certificado|obter\s*(o\s*)?certificado|obter\s*(a\s*)?certid[aã]o|gerar\s*certificado|confirmar\s*(a\s*)?emiss[aã]o/i;
+  /* O fluxo real da Caixa (confirmado observando o site) tem duas etapas
+     depois do resultado da consulta: "Visualizar" (input#mainForm:btnVisualizar)
+     leva a uma segunda página, que só então mostra o botão "Imprimir"
+     (já coberto por DOWNLOAD_TEXT_HINTS mais abaixo). "Obter Certificado"
+     e "Confirmar emissão" continuam aqui como variantes de outros portais
+     que possam usar uma etapa de emissão nomeada de forma diferente. */
+  const EMIT_STEP_TEXT_HINTS = /emitir\s*(a\s*)?(nova\s*)?certid[aã]o|gerar\s*(a\s*)?(nova\s*)?certid[aã]o|emitir\s*certificado|obter\s*(o\s*)?certificado|obter\s*(a\s*)?certid[aã]o|gerar\s*certificado|confirmar\s*(a\s*)?emiss[aã]o|\bvisualizar\b/i;
   /* Seções do tipo "consultar autenticidade de certidão emitida" (por número
      de controle) existem nesses portais ao lado da emissão — descartamos
      campos/botões que estejam dentro de um bloco assim marcado. */
@@ -51,6 +54,25 @@
      que vale a pena tentar de novo automaticamente em vez de desistir. */
   const TEMP_UNAVAILABLE_HINTS = /temporariamente indispon[ií]vel|servi[cç]o.{0,30}indispon[ií]vel|indispon[ií]vel.{0,30}moment|tente novamente (mais tarde|em alguns minutos)|sistema (est[aá] )?fora do ar|erro (interno|inesperado) do servidor|falha ao processar/i;
   const DOWNLOAD_TEXT_HINTS = /baixar|salvar|download|imprimir|gerar pdf|visualizar certid[aã]o|visualizar certificado/i;
+  /* Seletores confirmados observando o site ao vivo (não uma heurística) —
+     tentados depois de um override manual do usuário (que sempre tem
+     prioridade) e antes da heurística genérica em resolveElement(). Só
+     entram aqui campos onde a heurística já se mostrou não confiável o
+     bastante para valer a pena fixar; se o site mudar o HTML no futuro e o
+     id ficar obsoleto, o querySelector simplesmente não acha nada e cai de
+     volta na heurística normalmente. */
+  const KNOWN_SELECTORS = {
+    cndt: {
+      cnpjInput: '#gerarCertidaoForm\\:cpfCnpj',
+    },
+  };
+  /* Depois de preencher o CNPJ, alguns sites esperam o foco já estar no
+     campo de resposta do captcha (ex.: o CNDT do TST expõe o captcha em
+     áudio/imagem e o campo de resposta em #idCampoResposta) — sem isso o
+     usuário precisa clicar manualmente antes de poder digitar a resposta. */
+  const POST_FILL_FOCUS_SELECTOR = {
+    cndt: '#idCampoResposta',
+  };
   /* O CNDT (TST) não mostra um PDF na própria página — ele confirma no
      texto que já mandou por e-mail ("Certidão EMITIDA e ENVIADA por e-mail
      com sucesso"). Precisa ser verificado ANTES de RESULT_TEXT_HINTS
@@ -349,6 +371,11 @@
       const el = document.querySelector(override);
       if (el) return el;
     }
+    const known = KNOWN_SELECTORS[siteKey] && KNOWN_SELECTORS[siteKey][kind];
+    if (known) {
+      const el = document.querySelector(known);
+      if (el) return el;
+    }
     return heuristicFn();
   }
 
@@ -474,6 +501,15 @@
       setNativeValue(input, cnpj);
       await sleep(300);
       await runExtraSteps(siteKey);
+
+      const focusSelector = POST_FILL_FOCUS_SELECTOR[siteKey];
+      if (focusSelector) {
+        const focusTarget = document.querySelector(focusSelector);
+        if (focusTarget && isVisible(focusTarget)) {
+          focusTarget.focus();
+          recordDebug(siteKey, 'post_fill_focus', `Foco movido para ${focusSelector}.`);
+        }
+      }
 
       const submit = await waitFor(
         () => resolveElement('submitButton', siteKey, selectorOverrides, () => findButtonHeuristic(SUBMIT_TEXT_PRIORITY)),

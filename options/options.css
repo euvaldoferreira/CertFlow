@@ -84,3 +84,23 @@ th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--bord
 th { color: var(--muted); font-weight: 600; }
 
 #clear-history-btn { margin-top: 10px; }
+
+#debug-log-preview {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+#debug-log-preview li {
+  padding: 5px 8px;
+  font: 11px/1.4 ui-monospace, monospace;
+  border-bottom: 1px dashed var(--border);
+}
+#debug-log-preview li:last-child { border-bottom: none; }
+#debug-log-preview li .missing { color: #c0392b; }
+#debug-log-preview li .time { color: var(--muted); margin-right: 6px; }
+
+.actions-row { display: flex; gap: 8px; margin-top: 10px; }

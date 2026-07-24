@@ -199,6 +199,57 @@
     return parts.join(' > ');
   }
 
+  /* Retrato estrutural da página no momento — só atributos/rótulos, nunca
+     valores digitados ou conteúdo da certidão. Serve para depurar por que a
+     detecção automática errou um campo, sem expor dados sensíveis no log. */
+  function snapshotPage() {
+    const inputs = Array.from(document.querySelectorAll('input'))
+      .filter(isVisible)
+      .slice(0, 30)
+      .map((el) => ({
+        tag: el.tagName.toLowerCase(),
+        type: el.type,
+        id: el.id || null,
+        name: el.name || null,
+        formcontrolname: el.getAttribute('formcontrolname'),
+        placeholder: el.getAttribute('placeholder'),
+        ariaLabel: el.getAttribute('aria-label'),
+        maxLength: el.maxLength > 0 ? el.maxLength : null,
+        excludedContext: isInExcludedContext(el),
+        selector: elementToSelector(el),
+      }));
+
+    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn, a[role="button"], a'))
+      .filter(isVisible)
+      .filter((el) => {
+        const t = textOf(el);
+        return t.length > 0 && t.length < 60;
+      })
+      .slice(0, 40)
+      .map((el) => ({
+        tag: el.tagName.toLowerCase(),
+        text: textOf(el),
+        isLink: el.tagName === 'A',
+        excludedContext: isInExcludedContext(el),
+        selector: elementToSelector(el),
+      }));
+
+    return { title: document.title, url: location.href, inputs, buttons };
+  }
+
+  function recordDebug(siteKey, step, detail, snapshot) {
+    browser.runtime
+      .sendMessage({
+        type: 'DEBUG_LOG',
+        siteKey,
+        step,
+        detail,
+        snapshot: snapshot ? snapshotPage() : null,
+        at: Date.now(),
+      })
+      .catch(() => {});
+  }
+
   function resolveElement(kind, siteKey, overrides, heuristicFn) {
     const override = overrides && overrides[siteKey] && overrides[siteKey][kind];
     if (override) {
@@ -284,6 +335,7 @@
      de imprimir/baixar (fallback pedindo 1 clique ao usuário via background). */
   async function runFlow(siteKey, cnpj) {
     try {
+      recordDebug(siteKey, 'start', `URL: ${location.href}`, true);
       const { selectorOverrides = {} } = await browser.storage.local.get('selectorOverrides');
 
       /* Apps Angular/JSF ainda podem estar renderizando quando o content
@@ -293,9 +345,11 @@
         { timeout: 20000, interval: 400 }
       );
       if (!input) {
+        recordDebug(siteKey, 'cnpj_input_missing', 'Nenhum campo de CNPJ encontrado pela heurística nem por override.', true);
         sendStatus(siteKey, 'error', 'Campo de CNPJ não encontrado. Use "Selecionar na página" nas opções da extensão.');
         return;
       }
+      recordDebug(siteKey, 'cnpj_input_found', elementToSelector(input));
       setNativeValue(input, cnpj);
       await sleep(300);
 
@@ -304,9 +358,11 @@
         { timeout: 8000, interval: 300 }
       );
       if (!submit) {
+        recordDebug(siteKey, 'submit_missing', 'Nenhum botão de consulta encontrado pela heurística nem por override.', true);
         sendStatus(siteKey, 'error', 'Botão de consulta não encontrado. Use "Selecionar na página" nas opções da extensão.');
         return;
       }
+      recordDebug(siteKey, 'submit_found', `"${textOf(submit)}" (${elementToSelector(submit)})`);
       sendStatus(siteKey, 'submitting');
       submit.click();
 
@@ -318,20 +374,24 @@
       }, { timeout: 15000, interval: 400 });
 
       if (captchaCheck && captchaCheck.type === 'captcha') {
+        recordDebug(siteKey, 'captcha_detected', 'Captcha visível após o envio.');
         sendStatus(siteKey, 'captcha');
         const resolved = await waitFor(() => detectResult(), { timeout: 300000, interval: 800 });
         if (!resolved) {
+          recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após resolução do captcha (5 min).', true);
           sendStatus(siteKey, 'error', 'Tempo esgotado aguardando a resolução do captcha.');
           return;
         }
       } else if (!captchaCheck) {
         const resolvedLate = await waitFor(() => detectResult(), { timeout: 15000, interval: 500 });
         if (!resolvedLate) {
+          recordDebug(siteKey, 'result_missing', 'Nenhum texto de resultado reconhecido após o envio.', true);
           sendStatus(siteKey, 'error', 'A página não retornou um resultado reconhecível. Verifique o CNPJ ou ajuste os seletores.');
           return;
         }
       }
 
+      recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
       sendStatus(siteKey, 'result_ready');
       await sleep(500);
 
@@ -341,6 +401,7 @@
          procurar o link de download. */
       const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
       if (emitBtn && isVisible(emitBtn) && !emitBtn.disabled) {
+        recordDebug(siteKey, 'emit_button_found', `"${textOf(emitBtn)}" (${elementToSelector(emitBtn)})`);
         sendStatus(siteKey, 'emitting');
         emitBtn.click();
         await waitFor(() => findDownloadTrigger(), { timeout: 20000, interval: 500 });
@@ -348,9 +409,11 @@
 
       const trigger = resolveElement('downloadTrigger', siteKey, selectorOverrides, findDownloadTrigger);
       if (!trigger) {
+        recordDebug(siteKey, 'download_trigger_missing', 'Nenhum link .pdf nem botão de baixar/salvar/imprimir encontrado.', true);
         sendStatus(siteKey, 'manual_save_needed');
         return;
       }
+      recordDebug(siteKey, 'download_trigger_found', elementToSelector(trigger.el || trigger));
 
       const el = trigger.el || trigger;
       const href = el.tagName === 'A' ? el.href : null;
@@ -396,7 +459,9 @@
     fetchAsBase64,
     enablePickerMode,
     runFlow,
-    SUBMIT_TEXT_HINTS,
+    snapshotPage,
+    recordDebug,
+    SUBMIT_TEXT_PRIORITY,
   };
 
   function registerPickerListener(siteKey) {

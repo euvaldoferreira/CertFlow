@@ -97,6 +97,22 @@
     <button id="clear-history-btn" type="button">Limpar histórico</button>
   </section>
 
+  <section class="debug-log">
+    <h2>Log de navegação (depuração)</h2>
+    <p class="intro">
+      Registra, a cada execução, quais campos e botões a extensão encontrou (ou não) em cada site — só
+      informações estruturais da página (ids, textos de botão, seletores), nunca o CNPJ digitado nem o
+      conteúdo da certidão. Útil para diagnosticar por que a detecção automática falhou em algum passo:
+      baixe o log depois de uma execução e envie para análise.
+    </p>
+    <p id="debug-log-count" class="tab-hint"></p>
+    <ul id="debug-log-preview"></ul>
+    <div class="actions-row">
+      <button id="download-log-btn" type="button">Baixar log (.json)</button>
+      <button id="clear-log-btn" type="button">Limpar log</button>
+    </div>
+  </section>
+
   <script src="../lib/cnpj.js"></script>
   <script src="options.js"></script>
 </body>

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CertFlow - Emissor de Certidões CNPJ",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Automatiza a emissão da Certidão de Regularidade Fiscal (Receita Federal) e do Certificado de Regularidade do FGTS (Caixa) a partir de um CNPJ, salvando os PDFs automaticamente.",
   "browser_specific_settings": {
     "gecko": {

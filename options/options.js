@@ -97,14 +97,58 @@
     loadHistory();
   });
 
+  async function loadDebugLog() {
+    const { debugLog = [] } = await browser.storage.local.get('debugLog');
+    document.getElementById('debug-log-count').textContent = debugLog.length
+      ? `${debugLog.length} evento(s) registrado(s).`
+      : 'Nenhum evento registrado ainda — rode uma emissão para gerar o log.';
+
+    const list = document.getElementById('debug-log-preview');
+    list.innerHTML = '';
+    debugLog.slice(-25).reverse().forEach((entry) => {
+      const li = document.createElement('li');
+      const time = document.createElement('span');
+      time.className = 'time';
+      time.textContent = new Date(entry.at).toLocaleTimeString('pt-BR');
+      li.appendChild(time);
+
+      const isMissing = /missing|timeout/.test(entry.step || '');
+      const label = document.createElement('span');
+      if (isMissing) label.className = 'missing';
+      label.textContent = `[${SITE_LABELS[entry.siteKey] || entry.siteKey}] ${entry.step}${entry.detail ? ' — ' + entry.detail : ''}`;
+      li.appendChild(label);
+      list.appendChild(li);
+    });
+  }
+
+  document.getElementById('download-log-btn').addEventListener('click', async () => {
+    const { debugLog = [] } = await browser.storage.local.get('debugLog');
+    if (!debugLog.length) {
+      alert('Ainda não há eventos registrados. Rode uma emissão primeiro.');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(debugLog, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await browser.downloads.download({ url, filename: `CertFlow/logs/navegacao_${timestamp}.json`, saveAs: false, conflictAction: 'uniquify' });
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  });
+
+  document.getElementById('clear-log-btn').addEventListener('click', async () => {
+    await browser.storage.local.set({ debugLog: [] });
+    loadDebugLog();
+  });
+
   browser.storage.onChanged.addListener((changes) => {
     if (changes.selectorOverrides) loadOverrides();
     if (changes.history) loadHistory();
+    if (changes.debugLog) loadDebugLog();
   });
 
   loadOverrides();
   refreshTabHints();
   loadFolder();
   loadHistory();
+  loadDebugLog();
   setInterval(refreshTabHints, 3000);
 })();

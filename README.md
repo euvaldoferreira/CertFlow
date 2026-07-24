@@ -57,6 +57,18 @@ caso do site no seu acesso, use o campo opcional **"Botão emitir (se houver eta
 Configurações para apontar esse segundo botão — a extensão clicará nele automaticamente depois de obter
 o resultado da consulta, antes de procurar o link de download.
 
+## Log de navegação (para depurar e calibrar mais rápido)
+
+A cada execução, o CertFlow registra internamente quais campos/botões encontrou (ou não) em cada site —
+seletor usado, texto do botão, e, quando algo falha, um retrato estrutural da página (ids, `name`,
+`placeholder`, texto de botões visíveis). **Nunca registra o CNPJ digitado nem o conteúdo da certidão**,
+só metadados de estrutura da página.
+
+Na tela de **Configurações → Log de navegação**, dá para acompanhar os últimos eventos, baixar o log
+completo em JSON (`CertFlow/logs/navegacao_<timestamp>.json` na pasta de downloads) ou limpá-lo. Se a
+detecção automática errar um campo, rode uma vez, baixe o log e use-o para ajustar os seletores manuais
+(ou para relatar o problema com detalhes precisos).
+
 ## Onde os arquivos são salvos
 
 `Downloads/<pasta configurada>/<CNPJ sem máscara>/<site>_<timestamp>.pdf`. A pasta padrão é `CertFlow`

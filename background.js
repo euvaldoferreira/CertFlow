@@ -238,6 +238,13 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      case 'DEBUG_LOG': {
+        const { debugLog = [] } = await browser.storage.local.get('debugLog');
+        debugLog.push({ at: msg.at, siteKey: msg.siteKey, step: msg.step, detail: msg.detail, snapshot: msg.snapshot });
+        await browser.storage.local.set({ debugLog: debugLog.slice(-300) });
+        sendResponse({ ok: true });
+        break;
+      }
       default:
         break;
     }

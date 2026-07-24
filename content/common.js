@@ -752,6 +752,32 @@
     return handleRfbCertidoesListFlow(siteKey, minDays);
   }
 
+  /* Caixa: depois do resultado da consulta, a certidão de verdade só fica
+     acessível clicando num link cujo texto é "Certificado de Regularidade
+     do FGTS - CRF" — um <a> puro, sem classe .btn nem role="button", por
+     isso não é achado por findButtonHeuristic (que só aceita a.btn e
+     a[role="button"] entre os links). O mesmo texto também aparece como
+     item fixo do menu superior do site, o que já obrigou detectionText()
+     a excluir todo <a> da detecção de RESULTADO (ver comentário acima de
+     RESULT_TEXT_HINTS) — mas aqui é intencional: procuramos e clicamos
+     nesse link de propósito, é assim que se chega à tela realmente
+     imprimível. A Caixa só renderiza esse link quando existe certificado
+     a emitir para o CNPJ consultado; se não existir, não há nada para
+     imprimir. */
+  const CAIXA_CRF_LINK_HINTS = /certificado\s+de\s+regularidade\s+do\s+fgts\s*-?\s*crf/i;
+
+  async function handleCaixaCrfLink(siteKey) {
+    const link = await waitFor(() => {
+      const links = Array.from(document.querySelectorAll('a')).filter(isVisible);
+      return links.find((el) => CAIXA_CRF_LINK_HINTS.test(textOf(el))) || null;
+    }, { timeout: 8000, interval: 300 });
+    if (!link) return false;
+    recordDebug(siteKey, 'caixa_crf_link_click', `"${textOf(link)}" (${elementToSelector(link)})`);
+    link.click();
+    await sleep(500);
+    return true;
+  }
+
   const CERTIDOES_LIST_HINTS = /rela[cç][aã]o\s+das\s+certid[oõ]es\s+emitidas\s+por\s+data\s+de\s+validade/i;
   const SEGUNDA_VIA_HINTS = /segunda\s*via|2\s*[ªa]\s*via/i;
   const VALIDA_STATUS_HINTS = /\bv[aá]lida\b/i;
@@ -1060,6 +1086,24 @@
       sendStatus(siteKey, 'ai_verdict', resultVerdict);
     }
     await sleep(500);
+
+    /* Passo específico da Caixa: só depois de clicar no link "Certificado
+       de Regularidade do FGTS - CRF" (ver handleCaixaCrfLink acima) é que
+       o restante do fluxo genérico abaixo (botão "Visualizar" → segunda
+       página com "Imprimir", já coberto por EMIT_STEP_TEXT_HINTS /
+       DOWNLOAD_TEXT_HINTS) tem algo pra encontrar. Se o link não existir,
+       não adianta seguir procurando botão de emitir/baixar — não existe
+       certificado pra este CNPJ; encerra como concluído sem certificado,
+       igual ao caso de impedimento tratado acima. */
+    if (siteKey === 'caixa') {
+      const clickedCrfLink = await handleCaixaCrfLink(siteKey);
+      if (!clickedCrfLink) {
+        const detail = 'Link "Certificado de Regularidade do FGTS - CRF" não encontrado — não há certificado a emitir para este CNPJ.';
+        recordDebug(siteKey, 'caixa_crf_link_missing', detail, true);
+        sendStatus(siteKey, 'concluded_without_certificate', detail);
+        return;
+      }
+    }
 
     /* Alguns desses portais mostram a "situação" numa primeira consulta e
        só geram o PDF depois de um ou mais cliques extras — a Caixa, por

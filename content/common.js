@@ -839,17 +839,35 @@
        ngx-datatable e de bibliotecas parecidas) antes de procurar o
        botão, em vez de só olhar o grupo específico ou seu pai imediato. */
     const trueRow = bestRow.closest('[class*="body-row"], [class*="row-wrapper"]') || bestRow;
-    const findSegundaVia = (scope) =>
-      Array.from(scope.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).find((el) => SEGUNDA_VIA_HINTS.test(textOf(el)));
+
+    /* snapshotPage() (e o scan de botões da página) descarta elementos sem
+       texto visível — "Segunda Via" provavelmente é um ícone (aria-label
+       ou title, sem texto), por isso nunca aparecia em nenhum snapshot.
+       Checa texto, aria-label E title; se nada bater com o padrão, cai
+       pro fallback de "só existe um elemento clicável na linha" — comum
+       em colunas de ação com um único ícone por linha. */
+    const clickableSelector = 'a, button, input[type="button"], input[type="submit"], [role="button"]';
+    const labelOf = (el) => `${textOf(el)} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`.trim();
+    function findSegundaVia(scope) {
+      const clickables = Array.from(scope.querySelectorAll(clickableSelector)).filter((el) => isVisible(el) && !el.disabled);
+      const byHint = clickables.find((el) => SEGUNDA_VIA_HINTS.test(labelOf(el)));
+      if (byHint) return byHint;
+      return clickables.length === 1 ? clickables[0] : null;
+    }
+
     const segundaViaBtn =
       findSegundaVia(trueRow) ||
       findSegundaVia(bestRow) ||
       (bestRow.parentElement ? findSegundaVia(bestRow.parentElement) : null);
     if (!segundaViaBtn) {
+      const clickables = Array.from(trueRow.querySelectorAll(clickableSelector)).filter(isVisible);
+      const diag = clickables
+        .map((el) => `<${el.tagName.toLowerCase()}> texto="${textOf(el)}" aria-label="${el.getAttribute('aria-label') || ''}" title="${el.getAttribute('title') || ''}" class="${el.className}" (${elementToSelector(el)})`)
+        .join(' | ');
       recordDebug(
         siteKey,
         'certidoes_segunda_via_missing',
-        `Botão "Segunda Via" não encontrado na linha escolhida (${elementToSelector(bestRow)}), na linha inteira (${elementToSelector(trueRow)}) nem no elemento pai.`,
+        `Botão "Segunda Via" não encontrado na linha (${elementToSelector(trueRow)}). Elementos clicáveis na linha: ${diag || 'nenhum'}`,
         true
       );
       return false;

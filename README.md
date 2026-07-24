@@ -124,8 +124,11 @@ mais distante e clica em "Segunda Via" dela. Confirmado em log real: a RFB usa *
 cada linha é dividida em vários `div.datatable-row-group` **irmãos** (colunas), não aninhados — o grupo
 com "válida"+data pode não ser o mesmo que tem o botão de ação. Por isso a busca do botão sobe até achar
 o container da linha inteira (classe contendo `body-row` ou `row-wrapper`) antes de procurar "Segunda
-Via", em vez de olhar só o grupo específico ou seu pai imediato. A extração de datas usa dois regexes
-separados de propósito: reusar
+Via", em vez de olhar só o grupo específico ou seu pai imediato. O próprio botão "Segunda Via" também não
+tem texto visível (confirmado: sumia até do scan geral de botões da página, que descarta elementos sem
+texto) — é provavelmente um ícone. A busca agora também checa `aria-label`/`title`, e cai num fallback de
+"só existe um elemento clicável na linha" quando nenhum rótulo bate, comum em colunas de ação com um
+único ícone por linha. A extração de datas usa dois regexes separados de propósito: reusar
 o mesmo objeto com flag `/g` entre `.test()` (checagem booleana) e `matchAll()` (extração) causa falso-
 negativo imprevisível, porque um regex global guarda `lastIndex` entre chamadas de `.test()` — reusar o
 mesmo objeto pra checar strings diferentes faz ele "lembrar" uma posição da string anterior (bug real

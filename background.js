@@ -482,43 +482,54 @@ async function waitForNativeDownload(siteKey, sinceMs, { timeout = 10000, interv
    intercepta QUALQUER download (nativo ou não) antes de ele ser salvo,
    permitindo sugerir um nome/caminho novo — usado aqui pra redirecionar
    também os downloads nativos pra mesma pasta/convenção de nome. */
-browser.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-  /* Nunca reprocessa os que a própria extensão já iniciou (já vieram com
-     o nome certo de handleDownloadBlob) — checa tanto pelo id quanto pelo
-     esquema da URL blob:, que só a extensão usa (belt-and-suspenders,
-     dado que o id pode não estar no Set ainda por uma corrida de timing). */
-  const isOwnBlob = /^blob:(moz|chrome)-extension:\/\//.test(downloadItem.url || '');
-  if (selfInitiatedDownloadIds.has(downloadItem.id) || isOwnBlob) return false;
-  if (!currentRun) return false;
+/* Registro protegido por try/catch: se downloads.onDeterminingFilename
+   não existir ou não puder ser usado nesse navegador/versão, um erro
+   síncrono aqui pararia a execução do resto do arquivo — inclusive
+   registros mais abaixo, como o clique no menu de contexto que abre o
+   popup (bug real: o popup parou de abrir pelo menu de contexto depois
+   dessa função ser adicionada, porque ela vem antes no arquivo). Nunca
+   deixa uma função nova e opcional derrubar o resto da extensão. */
+try {
+  browser.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+    /* Nunca reprocessa os que a própria extensão já iniciou (já vieram com
+       o nome certo de handleDownloadBlob) — checa tanto pelo id quanto pelo
+       esquema da URL blob:, que só a extensão usa (belt-and-suspenders,
+       dado que o id pode não estar no Set ainda por uma corrida de timing). */
+    const isOwnBlob = /^blob:(moz|chrome)-extension:\/\//.test(downloadItem.url || '');
+    if (selfInitiatedDownloadIds.has(downloadItem.id) || isOwnBlob) return false;
+    if (!currentRun) return false;
 
-  const matchEntry = Object.entries(currentRun.jobs).find(([siteKey, job]) => {
-    if (job.status !== 'running') return false;
-    const hostname = siteHostname(siteKey);
-    if (!hostname) return false;
-    const ref = `${downloadItem.referrer || ''} ${downloadItem.url || ''}`;
-    return ref.includes(hostname);
+    const matchEntry = Object.entries(currentRun.jobs).find(([siteKey, job]) => {
+      if (job.status !== 'running') return false;
+      const hostname = siteHostname(siteKey);
+      if (!hostname) return false;
+      const ref = `${downloadItem.referrer || ''} ${downloadItem.url || ''}`;
+      return ref.includes(hostname);
+    });
+    if (!matchEntry) return false;
+    const [siteKey] = matchEntry;
+    const cnpj = currentRun.cnpj;
+
+    (async () => {
+      const originalName = downloadItem.filename || 'certidao.pdf';
+      const extMatch = /\.([a-zA-Z0-9]+)$/.exec(originalName);
+      const ext = extMatch ? extMatch[1] : 'pdf';
+      const filename = await buildCertidaoFilename(siteKey, cnpj, ext);
+      try {
+        suggest({ filename, conflictAction: 'uniquify' });
+        const { history = [] } = await browser.storage.local.get('history');
+        history.unshift({ cnpj, siteKey, filename, downloadId: downloadItem.id, at: Date.now() });
+        await browser.storage.local.set({ history: history.slice(0, 100) });
+      } catch (err) {
+        /* Se o navegador já rejeitou por algum motivo, deixa seguir com o
+           nome padrão em vez de travar o download inteiro. */
+      }
+    })();
+    return true; // sinaliza que suggest() será chamado de forma assíncrona
   });
-  if (!matchEntry) return false;
-  const [siteKey] = matchEntry;
-  const cnpj = currentRun.cnpj;
-
-  (async () => {
-    const originalName = downloadItem.filename || 'certidao.pdf';
-    const extMatch = /\.([a-zA-Z0-9]+)$/.exec(originalName);
-    const ext = extMatch ? extMatch[1] : 'pdf';
-    const filename = await buildCertidaoFilename(siteKey, cnpj, ext);
-    try {
-      suggest({ filename, conflictAction: 'uniquify' });
-      const { history = [] } = await browser.storage.local.get('history');
-      history.unshift({ cnpj, siteKey, filename, downloadId: downloadItem.id, at: Date.now() });
-      await browser.storage.local.set({ history: history.slice(0, 100) });
-    } catch (err) {
-      /* Se o navegador já rejeitou por algum motivo, deixa seguir com o
-         nome padrão em vez de travar o download inteiro. */
-    }
-  })();
-  return true; // sinaliza que suggest() será chamado de forma assíncrona
-});
+} catch (err) {
+  console.error('CertFlow: não foi possível registrar downloads.onDeterminingFilename', err);
+}
 
 async function sendLogToApi(events, source) {
   const { apiUrl, apiKey, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiKey', 'apiAutoSend']);

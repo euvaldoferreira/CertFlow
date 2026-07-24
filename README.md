@@ -114,7 +114,11 @@ Certidão" para chegar à certidão de verdade e seguir o download normalmente. 
 `name="dataFinal"`, mas o de data inicial (confirmado num snapshot real) não tem `name` nenhum, só um id
 gerado pelo Angular — por isso os dois são achados juntos num único `waitFor`, que exige dois campos de
 texto com o mesmo placeholder ("Selecione a data") visíveis ao mesmo tempo: o que tiver `name="dataFinal"`
-é a data final, o outro é a data inicial.
+é a data final, o outro é a data inicial. A opção "data de validade" é escolhida clicando na **label**
+(não só no `<input type="radio">` escondido por trás) — testando manualmente, os campos de data aparecem
+em poucos segundos junto com o resto da tela, mas clicar só no input não disparava o efeito completo de
+revelar os campos condicionais em automação, um problema comum em componentes customizados desses design
+systems de governo, onde o clique de verdade é tratado por um listener na label/wrapper visível.
 
 O RFB também acionava um aviso de "resolva o captcha" sem ter captcha nenhum pra resolver — bug real de
 precedência de operadores em `detectCaptcha()` (um `&&`/`||` sem parênteses fazia a checagem de

@@ -607,15 +607,19 @@
     return true;
   }
 
+  /* Retorna a label E o input de rádio associado — clicar só no input pode
+     não bastar em componentes customizados (comuns nesses design systems
+     de governo), onde o clique de verdade é tratado por um listener na
+     label/wrapper visível, não no input nativo escondido por trás. */
   function findRadioByLabelText(pattern) {
     const labels = Array.from(document.querySelectorAll('label'));
     const target = labels.find((l) => pattern.test(textOf(l)));
     if (!target) return null;
-    if (target.htmlFor) {
-      const el = document.getElementById(target.htmlFor);
-      if (el) return el;
+    let radio = target.htmlFor ? document.getElementById(target.htmlFor) : null;
+    if (!radio || radio.type !== 'radio') {
+      radio = target.closest('div, mat-radio-button, .form-group')?.querySelector('input[type="radio"]') || null;
     }
-    return target.closest('div, mat-radio-button, .form-group')?.querySelector('input[type="radio"]') || null;
+    return radio ? { label: target, radio } : null;
   }
 
   /* RFB: na tela "Certidão Válida Encontrada", clica em "Consultar" (não
@@ -632,32 +636,43 @@
     recordDebug(siteKey, 'certidao_valida_consultar_click', `"${textOf(consultarBtn)}" (${elementToSelector(consultarBtn)})`);
     consultarBtn.click();
 
-    const radio = await waitFor(() => findRadioByLabelText(/data\s+de\s+validade/i), { timeout: 15000, interval: 400 });
-    if (!radio) {
+    const radioMatch = await waitFor(() => findRadioByLabelText(/data\s+de\s+validade/i), { timeout: 15000, interval: 400 });
+    if (!radioMatch) {
       recordDebug(siteKey, 'certidao_valida_radio_missing', 'Opção "data de validade" não encontrada.', true);
       return false;
     }
-    radio.click();
-    recordDebug(siteKey, 'certidao_valida_radio_selected', elementToSelector(radio));
+    const { label, radio } = radioMatch;
+    /* Clica na label primeiro — é nela que um usuário real clica, e é ela
+       que costuma disparar o efeito completo (revelar os campos
+       condicionais) em componentes customizados. Clicar só no input pode
+       marcá-lo como "checked" sem disparar esse efeito — confirmado na
+       prática: manualmente os campos aparecem juntos com a tela, mas a
+       automação não os revelava mesmo com o rádio marcado. */
+    label.click();
+    if (!radio.checked) radio.click();
+    recordDebug(siteKey, 'certidao_valida_radio_selected', `${elementToSelector(radio)} (checked=${radio.checked})`, true);
     await sleep(300);
 
-    /* Confirmado num snapshot real: o campo de data final tem
-       name="dataFinal", mas o de data inicial não tem name (nem
-       formcontrolname) nenhum — só um id gerado pelo Angular. Por isso a
-       data inicial é achada por exclusão: o outro campo de texto com o
-       mesmo placeholder ("Selecione a data"), que não seja o dataFinal.
-       Um único waitFor exigindo os dois ao mesmo tempo (em vez de duas
-       buscas sequenciais) evita perder a data inicial numa corrida caso
-       ela renderize um instante depois da data final. */
+    /* Testando manualmente, esses campos aparecem em poucos segundos,
+       junto com o resto da tela — não é demora do servidor. O problema
+       real era o clique no rádio não disparar o efeito completo de revelar
+       os campos condicionais (ver o clique na label acima). O timeout aqui
+       continua generoso só como rede de segurança, não porque a demora
+       seja esperada. */
     const dateFields = await waitFor(() => {
       const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(
         (el) => isVisible(el) && /selecione a data/i.test(el.getAttribute('placeholder') || '')
       );
       if (candidates.length < 2) return null;
-      const final = candidates.find((el) => el.getAttribute('name') === 'dataFinal') || candidates[candidates.length - 1];
-      const initial = candidates.find((el) => el !== final);
+      const finalIndex = candidates.findIndex((el) => el.getAttribute('name') === 'dataFinal');
+      const final = finalIndex >= 0 ? candidates[finalIndex] : candidates[candidates.length - 1];
+      /* Usa a posição do dataFinal como referência: o campo de data
+         inicial é o candidato logo antes dele entre os que têm esse
+         placeholder — mais preciso do que "qualquer outro", caso a tela
+         tenha mais de dois campos parecidos. */
+      const initial = finalIndex > 0 ? candidates[finalIndex - 1] : candidates.find((el) => el !== final);
       return initial && final ? { initial, final } : null;
-    }, { timeout: 10000, interval: 300 });
+    }, { timeout: 30000, interval: 300 });
     if (!dateFields) {
       recordDebug(siteKey, 'certidao_valida_datas_missing', 'Não achou os dois campos de data (esperava 2 inputs com placeholder "Selecione a data").', true);
       return false;

@@ -765,6 +765,12 @@
      matchAll (que não sofre desse problema) usa a versão global. */
   const BR_DATE_TEST = /\d{2}\/\d{2}\/\d{4}/;
   const BR_DATE_PATTERN = /(\d{2})\/(\d{2})\/(\d{4})/g;
+  /* "Data - Hora de Emissão" tem horário junto (a de validade, não) — usa
+     isso pra distinguir qual data da linha é a emissão: a que tiver um
+     horário colado é a emissão; a(s) sem horário são candidatas a data de
+     validade. Cada chamada usa uma instância nova (evita o mesmo problema
+     de lastIndex do BR_DATE_PATTERN global reaproveitado). */
+  const BR_DATETIME_PATTERN = /(\d{2})\/(\d{2})\/(\d{4})\s*[-–]?\s*(\d{2}):(\d{2})(?::(\d{2}))?/g;
 
   /* "Consultar Certidão" (com data de validade) devolve uma LISTA de
      certidões já emitidas nesse período, não a certidão direto — cada
@@ -834,37 +840,63 @@
       return false;
     }
 
-    let bestRow = null;
-    let bestDate = null;
-    for (const row of rows) {
-      const text = textOf(row);
-      const dates = Array.from(text.matchAll(BR_DATE_PATTERN)).map((m) => new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])));
-      if (!dates.length) continue;
-      const rowMaxDate = new Date(Math.max(...dates.map((d) => d.getTime())));
-      if (!bestDate || rowMaxDate > bestDate) {
-        bestDate = rowMaxDate;
-        bestRow = row;
-      }
-    }
-    if (!bestRow) {
+    /* Pra cada linha candidata, extrai a data de validade (a maior data
+       "pura", sem horário) e a data-hora de emissão (a que tiver horário
+       colado — "Data - Hora de Emissão" tem hora, a de validade não). */
+    const candidates = rows
+      .map((row) => {
+        const text = textOf(row);
+        const plainDates = Array.from(text.matchAll(BR_DATE_PATTERN)).map((m) => new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])));
+        const dateTimes = Array.from(text.matchAll(BR_DATETIME_PATTERN)).map(
+          (m) => new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] || 0))
+        );
+        if (!plainDates.length) return null;
+        return {
+          row,
+          validityDate: new Date(Math.max(...plainDates.map((d) => d.getTime()))),
+          emittedAt: dateTimes.length ? new Date(Math.max(...dateTimes.map((d) => d.getTime()))) : null,
+        };
+      })
+      .filter(Boolean);
+    if (!candidates.length) {
       recordDebug(siteKey, 'certidoes_lista_data_missing', 'Não conseguiu extrair datas das linhas válidas encontradas.', true);
       return false;
     }
 
-    /* Só reaproveita se a validade restante da melhor certidão encontrada
-       atender ao mínimo configurado pelo usuário (Configurações ou
-       popup) — evita pegar uma certidão que já está prestes a vencer. */
+    /* Só reaproveita certidões cuja validade restante atenda ao mínimo
+       configurado pelo usuário (Configurações ou popup) — evita pegar uma
+       que já está prestes a vencer. Entre as que atendem, se houver mais
+       de uma, escolhe a de emissão mais recente (não a de validade mais
+       distante) — uma certidão mais nova é preferível mesmo que uma mais
+       antiga, por coincidência, valha por mais tempo. */
     const today = new Date();
     const minValidDate = new Date(today.getTime() + (minDays || 0) * 24 * 60 * 60 * 1000);
-    if (bestDate < minValidDate) {
+    const qualifying = candidates.filter((c) => c.validityDate >= minValidDate);
+    if (!qualifying.length) {
+      const bestAmongAll = candidates.reduce((a, b) => (b.validityDate > a.validityDate ? b : a));
       recordDebug(
         siteKey,
         'certidoes_validade_insuficiente',
-        `Melhor certidão válida até ${bestDate.toLocaleDateString('pt-BR')} — abaixo do mínimo configurado de ${minDays} dias (precisaria valer até ${minValidDate.toLocaleDateString('pt-BR')}).`,
+        `Melhor certidão válida até ${bestAmongAll.validityDate.toLocaleDateString('pt-BR')} — abaixo do mínimo configurado de ${minDays} dias (precisaria valer até ${minValidDate.toLocaleDateString('pt-BR')}).`,
         true
       );
       return 'insufficient_validity';
     }
+
+    /* Se não achar data-hora de emissão em nenhuma candidata (layout da
+       linha diferente do esperado), cai de volta pra escolher pela
+       validade mais distante, com aviso no log — nunca trava o fluxo por
+       causa disso. */
+    const hasEmittedAt = qualifying.some((c) => c.emittedAt);
+    let best;
+    if (hasEmittedAt) {
+      best = qualifying.filter((c) => c.emittedAt).reduce((a, b) => (b.emittedAt > a.emittedAt ? b : a));
+    } else {
+      recordDebug(siteKey, 'certidoes_emissao_nao_encontrada', `Nenhuma data-hora de emissão reconhecida em ${qualifying.length} certidão(ões) qualificada(s) — escolhendo pela validade mais distante.`, true);
+      best = qualifying.reduce((a, b) => (b.validityDate > a.validityDate ? b : a));
+    }
+    const bestRow = best.row;
+    const bestDate = best.validityDate;
 
     /* Confirmado em log real: a RFB usa ngx-datatable, onde cada linha é
        dividida em vários div.datatable-row-group IRMÃOS (colunas), não
@@ -909,7 +941,13 @@
     }
 
     const fmt = (d) => d.toLocaleDateString('pt-BR');
-    recordDebug(siteKey, 'certidoes_segunda_via_click', `Linha escolhida (validade até ${fmt(bestDate)}): "${textOf(segundaViaBtn)}" (${elementToSelector(segundaViaBtn)})`, true);
+    const emittedInfo = best.emittedAt ? `, emitida em ${best.emittedAt.toLocaleString('pt-BR')}` : '';
+    recordDebug(
+      siteKey,
+      'certidoes_segunda_via_click',
+      `Linha escolhida entre ${qualifying.length} qualificada(s) (validade até ${fmt(bestDate)}${emittedInfo}): "${textOf(segundaViaBtn)}" (${elementToSelector(segundaViaBtn)})`,
+      true
+    );
     segundaViaBtn.click();
     await sleep(500);
     return true;

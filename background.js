@@ -448,6 +448,20 @@ async function hasNativeDownloadForSite(siteKey, sinceMs) {
   }
 }
 
+/* Uma checagem só, na hora, pode rodar cedo demais: se o site demorar pra
+   gerar o PDF (confirmado por um usuário: aconteceu bem depois do clique),
+   o download nativo ainda nem começou quando checamos, e a extensão cai no
+   fallback errado (imprimir a tela) momentos antes do download real
+   começar. Insiste por alguns segundos antes de desistir. */
+async function waitForNativeDownload(siteKey, sinceMs, { timeout = 10000, interval = 1000 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    if (await hasNativeDownloadForSite(siteKey, sinceMs)) return true;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  return false;
+}
+
 async function sendLogToApi(events, source) {
   const { apiUrl, apiKey, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiKey', 'apiAutoSend']);
   if (!apiAutoSend || !apiUrl || !apiKey) return;
@@ -532,11 +546,16 @@ async function handleCsStatus(msg, sender) {
       break;
     case 'manual_save_needed': {
       /* Antes de cair no fallback de imprimir a TELA, confere se o próprio
-         site já disparou um download nativo do navegador (comum quando o
-         servidor responde com Content-Disposition: attachment — não deixa
-         rastro nenhum no DOM pro content script ver). Se já baixou, o
-         arquivo real já está salvo; não faz sentido salvar a tela também. */
-      const nativeDownload = await hasNativeDownloadForSite(msg.siteKey, job.startedAt || currentRun.startedAt);
+         site já disparou (ou está prestes a disparar) um download nativo
+         do navegador (comum quando o servidor responde com
+         Content-Disposition: attachment — não deixa rastro nenhum no DOM
+         pro content script ver). Insiste por alguns segundos: se o site
+         demorar pra gerar o PDF, uma checagem única rodaria cedo demais e
+         cairia no fallback errado momentos antes do download real
+         começar (confirmado por um usuário). Se já baixou (ou baixa
+         dentro da espera), o arquivo real já está salvo; não faz sentido
+         salvar a tela também. */
+      const nativeDownload = await waitForNativeDownload(msg.siteKey, job.startedAt || currentRun.startedAt);
       if (nativeDownload) {
         addLog(`${site.label}: o próprio site já iniciou o download do PDF — não é preciso salvar a tela.`, 'success');
       } else {

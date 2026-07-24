@@ -137,8 +137,13 @@ referência.
 por data de validade"), cada linha com uma situação (válida/inválida) e um botão "Segunda Via" que gera o
 PDF daquela linha especificamente. A extensão acha a tela (confirmado em log real) e procura a "linha" da
 certidão de forma flexível — não assume que é um `<tr>` de tabela HTML de verdade, sobe a partir de onde
-o texto "válida" aparece até achar o menor ancestral que também contenha uma data — escolhe a de validade
-mais distante e clica em "Segunda Via" dela. Confirmado em log real: a RFB usa **ngx-datatable**, onde
+o texto "válida" aparece até achar o menor ancestral que também contenha uma data. Entre as linhas
+"válida" que atendem à validade mínima configurada, se houver mais de uma qualificada, escolhe a de
+**"Data - Hora de Emissão" mais recente** (não a de validade mais distante) — uma certidão mais nova é
+preferível mesmo que uma mais antiga, por coincidência, valha por mais tempo. A data de emissão é
+reconhecida pelo horário colado junto (a de validade não tem hora); se nenhuma linha qualificada tiver
+uma data-hora reconhecível, cai de volta para escolher pela validade mais distante, com aviso no log —
+nunca trava o fluxo por causa disso. Confirmado em log real: a RFB usa **ngx-datatable**, onde
 cada linha é dividida em vários `div.datatable-row-group` **irmãos** (colunas), não aninhados — o grupo
 com "válida"+data pode não ser o mesmo que tem o botão de ação. Por isso a busca do botão sobe até achar
 o container da linha inteira (classe contendo `body-row` ou `row-wrapper`) antes de procurar "Segunda
@@ -371,10 +376,13 @@ aviso no log) — nunca trava o fluxo.
 e pode ser alterada na página de Configurações.
 
 Quando o site não expõe um link de PDF nem um blob visível no DOM, a extensão primeiro confere se o
-próprio navegador já iniciou um download nativo (via `browser.downloads.search`, comparando o host do
-download com o do site) — comum quando o servidor responde com `Content-Disposition: attachment` sem
-deixar rastro nenhum na página (ex.: "Segunda Via" na RFB). Se já baixou, não faz nada além disso; só cai
-no fallback abaixo se realmente não detectar nenhum download:
+próprio navegador já iniciou (ou está prestes a iniciar) um download nativo (via `browser.downloads.search`,
+comparando o host do download com o do site) — comum quando o servidor responde com `Content-Disposition:
+attachment` sem deixar rastro nenhum na página (ex.: "Segunda Via"/"Emitir Nova Certidão" na RFB). Insiste
+por até 10 segundos antes de desistir: se o site demorar pra gerar o PDF, uma checagem única na hora
+rodaria cedo demais e cairia no fallback errado momentos antes do download real começar (confirmado por
+um usuário). Se detectar o download (na hora ou dentro da espera), não faz nada além disso; só cai no
+fallback abaixo se realmente não detectar nenhum:
 
 - **Firefox**: a extensão aciona o diálogo nativo "Salvar como PDF" — um clique extra para confirmar o
   local de salvamento (o Firefox não permite que extensões gravem arquivos arbitrários sem esse gesto).

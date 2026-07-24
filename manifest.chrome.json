@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CertFlow - Emissor de Certidões CNPJ",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Automatiza a emissão de certidões (Receita Federal, Caixa/FGTS, CNDT/TST) a partir de um CNPJ, salvando os PDFs automaticamente. Usa o Gemini Nano (on-device) para interpretar o resultado da certidão.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -10,16 +10,17 @@
     "tabs",
     "contextMenus",
     "notifications",
-    "alarms"
+    "alarms",
+    "system.display"
   ],
   "host_permissions": [
     "https://servicos.receitafederal.gov.br/*",
     "https://consulta-crf.caixa.gov.br/*",
     "https://cndt-certidao.tst.jus.br/*",
+    "https://consopt.www8.receita.fazenda.gov.br/*",
     "https://api-certflow.ecolmea.com/*"
   ],
   "action": {
-    "default_popup": "popup/popup.html",
     "default_title": "CertFlow - Emissor de Certidões",
     "default_icon": {
       "16": "icons/chrome/icon-16.png",
@@ -57,6 +58,12 @@
     {
       "matches": ["https://cndt-certidao.tst.jus.br/*"],
       "js": ["lib/browser-shim.js", "lib/cnpj.js", "content/common.js", "content/ai.js", "content/cndt-certidoes.js", "content/task-mining.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://consopt.www8.receita.fazenda.gov.br/*"],
+      "js": ["lib/browser-shim.js", "lib/cnpj.js", "content/common.js", "content/ai.js", "content/simples-nacional.js", "content/task-mining.js"],
       "run_at": "document_idle",
       "all_frames": false
     }

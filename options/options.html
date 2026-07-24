@@ -110,11 +110,32 @@
     </p>
   </section>
 
-  <section class="site-config manual-mode" data-site="simples">
-    <h2>Simples Nacional — Certidão de Regularidade</h2>
+  <section class="site-config" data-site="simples">
+    <h2>Simples Nacional — Consulta Optantes</h2>
+    <div class="field-row" data-kind="cnpjInput">
+      <label>Campo de CNPJ</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="submitButton">
+      <label>Botão consultar</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <div class="field-row" data-kind="downloadTrigger">
+      <label>Link/botão de download</label>
+      <input type="text" class="selector-value" readonly placeholder="opcional — a consulta normalmente não tem PDF; a extensão cai no salvamento manual" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
+    <p class="tab-hint" data-site-hint="simples">Nenhuma aba do site aberta no momento.</p>
     <p class="tab-hint">
-      Essa certidão exige login com conta gov.br, então não dá para automatizar como as demais — a
-      extensão só abre a aba e espera você concluir manualmente. Não há seletores para calibrar aqui.
+      É a Consulta Optantes (não exige login), num subdomínio próprio
+      (<code>consopt.www8.receita.fazenda.gov.br</code>) — o formulário real fica lá, não na página
+      inicial do Simples Nacional. O captcha é por hCaptcha; ao resolvê-lo, o site recarrega a página
+      inteira com o resultado (a extensão já lida com isso automaticamente).
     </p>
   </section>
 
@@ -245,6 +266,13 @@
       <p class="ai-summary tab-hint" data-ai-summary="cndt"></p>
       <div class="ai-fields" data-ai-fields="cndt"></div>
       <button class="analyze-btn" type="button" data-site="cndt">Verificar agora (chama a IA)</button>
+    </div>
+
+    <div class="ai-site-block" data-site="simples">
+      <h3>Simples Nacional</h3>
+      <p class="ai-summary tab-hint" data-ai-summary="simples"></p>
+      <div class="ai-fields" data-ai-fields="simples"></div>
+      <button class="analyze-btn" type="button" data-site="simples">Verificar agora (chama a IA)</button>
     </div>
   </section>
 

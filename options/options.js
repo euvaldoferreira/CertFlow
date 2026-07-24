@@ -3,6 +3,7 @@
     rfb: 'https://servicos.receitafederal.gov.br/*',
     caixa: 'https://consulta-crf.caixa.gov.br/*',
     cndt: 'https://cndt-certidao.tst.jus.br/*',
+    simples: 'https://consopt.www8.receita.fazenda.gov.br/*',
   };
   const SITE_LABELS = {
     rfb: 'Receita Federal',
@@ -273,7 +274,7 @@
       'selectorOverrides',
       'extraStepOverrides',
     ]);
-    for (const siteKey of ['rfb', 'caixa', 'cndt']) {
+    for (const siteKey of ['rfb', 'caixa', 'cndt', 'simples']) {
       const record = aiSuggestions[siteKey];
       const summaryEl = document.querySelector(`.ai-summary[data-ai-summary="${siteKey}"]`);
       const fieldsEl = document.querySelector(`.ai-fields[data-ai-fields="${siteKey}"]`);

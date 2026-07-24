@@ -42,11 +42,20 @@
      "indisponibilidade temporária": aqui não adianta tentar de novo, o
      certo é reportar e passar para a próxima certidão da fila. */
   const RESULT_BLOCKED_HINTS = /cnpj\s+inv[aá]lido|cnpj\s+n[aã]o\s+(consta|encontrado|cadastrado|localizado)|empregador\s+n[aã]o\s+(est[aá]\s+)?cadastrado|n[aã]o\s+foi\s+poss[ií]vel\s+(emitir|processar|confirmar)|informa[cç][oõ]es\s+dispon[ií]veis\s+n[aã]o\s+s[aã]o\s+suficientes|imped(e|imento)s?\s+(a|à)\s+certifica[cç][aã]o|n[aã]o\s+[eé]\s+poss[ií]vel\s+emitir/i;
+  /* Consulta Optantes do Simples Nacional não fala em "certidão" — o
+     resultado é uma frase dizendo se o CNPJ é (ou não) optante. As duas
+     variantes contêm "optante pelo simples nacional", então a diferença
+     entre optante/não-optante fica só no rótulo de log, não na detecção
+     de resultado (ambas são respostas válidas da consulta, não falhas). */
+  const RESULT_SIMPLES_NAO_OPTANTE_HINTS = /n[aã]o\s+(consta\s+como\s+|é\s+|est[aá]\s+)?optante\s+pelo\s+simples\s+nacional/i;
+  const RESULT_SIMPLES_OPTANTE_HINTS = /optante\s+pelo\s+simples\s+nacional/i;
   const RESULT_CLASSIFICATION_LABEL = {
     negativa: 'Certidão Negativa (regular, sem pendências)',
     positiva_com_pendencia: 'Certidão Positiva com Efeitos de Negativa (há pendências, mas suspensas)',
     positiva: 'Certidão Positiva (débitos ativos) ou situação irregular',
     regular: 'Situação regular',
+    simples_nao_optante: 'CNPJ não optante pelo Simples Nacional',
+    simples_optante: 'CNPJ optante pelo Simples Nacional',
   };
   /* Mensagem observada na prática: "O serviço de emissão de certidão está
      temporariamente indisponível. Tente novamente em alguns minutos." —
@@ -64,6 +73,9 @@
   const KNOWN_SELECTORS = {
     cndt: {
       cnpjInput: '#gerarCertidaoForm\\:cpfCnpj',
+    },
+    simples: {
+      cnpjInput: '#Cnpj',
     },
   };
   /* Depois de preencher o CNPJ, alguns sites esperam o foco já estar no
@@ -221,7 +233,7 @@
 
   function detectResult() {
     const bodyText = document.body.innerText || '';
-    return RESULT_TEXT_HINTS.test(bodyText) || RESULT_BLOCKED_HINTS.test(bodyText);
+    return RESULT_TEXT_HINTS.test(bodyText) || RESULT_BLOCKED_HINTS.test(bodyText) || RESULT_SIMPLES_OPTANTE_HINTS.test(bodyText);
   }
 
   function detectTemporarilyUnavailable() {
@@ -247,6 +259,10 @@
     if (RESULT_POSITIVA_HINTS.test(text)) return 'positiva';
     if (RESULT_NEGATIVA_HINTS.test(text)) return 'negativa';
     if (RESULT_TEXT_HINTS.test(text)) return 'regular';
+    /* "não optante" precisa ser testado antes do genérico "optante", já
+       que a frase negativa também contém a palavra "optante". */
+    if (RESULT_SIMPLES_NAO_OPTANTE_HINTS.test(text)) return 'simples_nao_optante';
+    if (RESULT_SIMPLES_OPTANTE_HINTS.test(text)) return 'simples_optante';
     return 'desconhecido';
   }
 
@@ -477,14 +493,141 @@
     }
   }
 
-  /* Fluxo genérico reaproveitado pelos dois sites: preenche o CNPJ, envia o
-     formulário, aguarda captcha (se aparecer) e resultado, e então localiza
-     um jeito de salvar o PDF — link direto (download silencioso) ou botão
-     de imprimir/baixar (fallback pedindo 1 clique ao usuário via background). */
+  function reportUnavailable(siteKey, overrideDetail) {
+    const detail = overrideDetail || extractMatchSnippet(TEMP_UNAVAILABLE_HINTS) || 'Serviço indisponível no momento.';
+    recordDebug(siteKey, 'temporarily_unavailable', detail, true);
+    sendStatus(siteKey, 'temporarily_unavailable', detail);
+  }
+
+  /* O CNDT normalmente gera o PDF na hora, igual RFB/Caixa (pego pelo
+     caminho normal de findDownloadTrigger logo abaixo) — o aviso de
+     "enviado por e-mail" só aparece quando NÃO existe link de PDF na
+     página, então só entra como sucesso alternativo nesse caso, nunca
+     no lugar da busca normal por um trigger de download. */
+  function checkEmailSentFallback(siteKey) {
+    if (!detectEmailSent()) return false;
+    const detail = extractMatchSnippet(EMAIL_SENT_HINTS) || 'Certidão emitida e enviada por e-mail.';
+    recordDebug(siteKey, 'emailed', detail, true);
+    sendStatus(siteKey, 'emailed', detail);
+    return true;
+  }
+
+  /* Processa a página assim que ela mostra um resultado — usado tanto no
+     fluxo normal (depois do submit) quanto quando o content script já
+     inicia com o resultado na tela: alguns sites (ex.: Simples Nacional)
+     fazem um POST de formulário de verdade em vez de atualização via ajax,
+     recarregando a página inteira e reinjetando o content script do zero
+     numa página que não tem mais o formulário de CNPJ — nesse caso não dá
+     pra "preencher de novo", só processar o que já está visível. */
+  async function processResult(siteKey, cnpj, selectorOverrides) {
+    recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
+
+    /* Alguns estados são definitivos e não vão gerar PDF nenhum (CNPJ
+       inválido, empregador não cadastrado no FGTS, etc.) — reporta como
+       erro dessa certidão específica e nem tenta procurar botão de
+       emitir/baixar, que não existirá. */
+    const classification = classifyResultText();
+    if (classification === 'bloqueado') {
+      const detail = extractMatchSnippet(RESULT_BLOCKED_HINTS) || 'O site indicou que não é possível emitir a certidão para este CNPJ agora.';
+      recordDebug(siteKey, 'result_blocked', detail, true);
+      sendStatus(siteKey, 'error', detail);
+      return;
+    }
+
+    sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL[classification] || null);
+
+    /* O Gemini Nano (quando disponível, só no Chrome) lê o texto visível
+       da página e classifica se a certidão saiu regular, com pendências,
+       ou se o "resultado" é na real uma falha temporária do site — isso
+       complementa a heurística de regex, que só reconhece frases exatas. */
+    const resultVerdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
+    if (resultVerdict) {
+      if (resultVerdict.status === 'indisponivel_temporario') {
+        reportUnavailable(siteKey, resultVerdict.resumo);
+        return;
+      }
+      sendStatus(siteKey, 'ai_verdict', resultVerdict);
+    }
+    await sleep(500);
+
+    /* Alguns desses portais mostram a "situação" numa primeira consulta e
+       só geram o PDF depois de um ou mais cliques extras — a Caixa, por
+       exemplo, usa um botão "Visualizar" nessa etapa, e pode ter mais de
+       uma confirmação em sequência. Repete a busca por um botão de
+       emitir/obter/visualizar/confirmar até achar um jeito de baixar ou
+       esgotar as tentativas, em vez de assumir que é sempre um clique só. */
+    const MAX_EMIT_STEPS = 3;
+    for (let step = 0; step < MAX_EMIT_STEPS; step++) {
+      if (findDownloadTrigger()) break;
+      const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
+      if (!emitBtn || !isVisible(emitBtn) || emitBtn.disabled) break;
+      recordDebug(siteKey, 'emit_button_found', `"${textOf(emitBtn)}" (${elementToSelector(emitBtn)}) [passo ${step + 1}/${MAX_EMIT_STEPS}]`);
+      sendStatus(siteKey, 'emitting');
+      emitBtn.click();
+      await waitFor(
+        () => findDownloadTrigger() || resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS])),
+        { timeout: 20000, interval: 500 }
+      );
+    }
+
+    const trigger = resolveElement('downloadTrigger', siteKey, selectorOverrides, findDownloadTrigger);
+    if (!trigger) {
+      if (checkEmailSentFallback(siteKey)) return;
+      recordDebug(siteKey, 'download_trigger_missing', 'Nenhum link .pdf nem botão de baixar/salvar/imprimir encontrado.', true);
+      sendStatus(siteKey, 'manual_save_needed');
+      return;
+    }
+    recordDebug(siteKey, 'download_trigger_found', elementToSelector(trigger.el || trigger));
+
+    const el = trigger.el || trigger;
+    const href = el.tagName === 'A' ? el.href : null;
+
+    if (href && /\.pdf($|\?)/i.test(href)) {
+      const { base64, mime } = await fetchAsBase64(href);
+      browser.runtime.sendMessage({ type: 'DOWNLOAD_BLOB', siteKey, cnpj, dataBase64: base64, mime }).catch(() => {});
+      sendStatus(siteKey, 'downloaded');
+      return;
+    }
+
+    el.click();
+    await sleep(1500);
+
+    const blobLink = Array.from(document.querySelectorAll('a[href^="blob:"], embed[src^="blob:"], iframe[src^="blob:"]')).find(isVisible);
+    const blobUrl = blobLink && (blobLink.href || blobLink.src);
+    if (blobUrl) {
+      const { base64, mime } = await fetchAsBase64(blobUrl);
+      browser.runtime.sendMessage({ type: 'DOWNLOAD_BLOB', siteKey, cnpj, dataBase64: base64, mime }).catch(() => {});
+      sendStatus(siteKey, 'downloaded');
+      return;
+    }
+
+    if (checkEmailSentFallback(siteKey)) return;
+    sendStatus(siteKey, 'manual_save_needed');
+  }
+
+  /* Fluxo genérico reaproveitado pelos sites automatizados: preenche o
+     CNPJ, envia o formulário, aguarda captcha (se aparecer) e resultado, e
+     então localiza um jeito de salvar o PDF — link direto (download
+     silencioso) ou botão de imprimir/baixar (fallback pedindo 1 clique ao
+     usuário via background). */
   async function runFlow(siteKey, cnpj) {
     try {
       recordDebug(siteKey, 'start', `URL: ${location.href}`, true);
       const { selectorOverrides = {} } = await browser.storage.local.get('selectorOverrides');
+
+      /* Alguns sites (ex.: Simples Nacional) fazem um POST de formulário de
+         verdade em vez de atualização via ajax — o que reinjeta o content
+         script do zero numa página que já mostra o resultado, sem mais o
+         formulário. Detecta esse caso antes de procurar o campo de CNPJ. */
+      if (detectTemporarilyUnavailable()) {
+        reportUnavailable(siteKey);
+        return;
+      }
+      if (detectResult()) {
+        recordDebug(siteKey, 'result_already_present', 'Resultado já visível ao iniciar (provável reinjeção após navegação de formulário).');
+        await processResult(siteKey, cnpj, selectorOverrides);
+        return;
+      }
 
       /* Apps Angular/JSF ainda podem estar renderizando quando o content
          script injeta — espera o campo aparecer em vez de checar uma vez só. */
@@ -533,30 +676,18 @@
         }, { timeout: timeoutMs, interval: 400 });
       }
 
-      /* O CNDT normalmente gera o PDF na hora, igual RFB/Caixa (pego pelo
-         caminho normal de findDownloadTrigger logo abaixo) — o aviso de
-         "enviado por e-mail" só aparece quando NÃO existe link de PDF na
-         página, então só entra como sucesso alternativo nesse caso, nunca
-         no lugar da busca normal por um trigger de download. */
-      function checkEmailSentFallback() {
-        if (!detectEmailSent()) return false;
-        const detail = extractMatchSnippet(EMAIL_SENT_HINTS) || 'Certidão emitida e enviada por e-mail.';
-        recordDebug(siteKey, 'emailed', detail, true);
-        sendStatus(siteKey, 'emailed', detail);
-        return true;
-      }
-
-      function reportUnavailable(overrideDetail) {
-        const detail = overrideDetail || extractMatchSnippet(TEMP_UNAVAILABLE_HINTS) || 'Serviço indisponível no momento.';
-        recordDebug(siteKey, 'temporarily_unavailable', detail, true);
-        sendStatus(siteKey, 'temporarily_unavailable', detail);
-      }
-
       let outcome = await waitForOutcome(15000);
 
       if (outcome && outcome.type === 'captcha') {
         recordDebug(siteKey, 'captcha_detected', 'Captcha visível após o envio.');
         sendStatus(siteKey, 'captcha');
+        /* Alguns sites (ex.: hCaptcha "invisível") fazem um POST de
+           formulário de verdade assim que o captcha é resolvido — a
+           navegação destrói esta execução no meio do caminho, sem erro
+           algum, e o content script reinjeta do zero na página de
+           resultado (pego pelo checkpoint de "resultado já visível" no
+           início de runFlow). Não há nada a fazer aqui além de aguardar
+           normalmente; se a página não navegar, o polling abaixo resolve. */
         outcome = await waitForOutcome(300000);
         if (!outcome) {
           recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após resolução do captcha (5 min).', true);
@@ -566,14 +697,14 @@
       }
 
       if (outcome && outcome.type === 'unavailable') {
-        reportUnavailable();
+        reportUnavailable(siteKey);
         return;
       }
 
       if (!outcome) {
         const verdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
         if (verdict && verdict.status === 'indisponivel_temporario') {
-          reportUnavailable(verdict.resumo);
+          reportUnavailable(siteKey, verdict.resumo);
           return;
         }
         recordDebug(siteKey, 'result_missing', 'Nenhum texto de resultado reconhecido após o envio.', true);
@@ -581,89 +712,7 @@
         return;
       }
 
-      recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
-
-      /* Alguns estados são definitivos e não vão gerar PDF nenhum (CNPJ
-         inválido, empregador não cadastrado no FGTS, etc.) — reporta como
-         erro dessa certidão específica e nem tenta procurar botão de
-         emitir/baixar, que não existirá. */
-      const classification = classifyResultText();
-      if (classification === 'bloqueado') {
-        const detail = extractMatchSnippet(RESULT_BLOCKED_HINTS) || 'O site indicou que não é possível emitir a certidão para este CNPJ agora.';
-        recordDebug(siteKey, 'result_blocked', detail, true);
-        sendStatus(siteKey, 'error', detail);
-        return;
-      }
-
-      sendStatus(siteKey, 'result_ready', RESULT_CLASSIFICATION_LABEL[classification] || null);
-
-      /* O Gemini Nano (quando disponível, só no Chrome) lê o texto visível
-         da página e classifica se a certidão saiu regular, com pendências,
-         ou se o "resultado" é na real uma falha temporária do site — isso
-         complementa a heurística de regex, que só reconhece frases exatas. */
-      const resultVerdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
-      if (resultVerdict) {
-        if (resultVerdict.status === 'indisponivel_temporario') {
-          reportUnavailable(resultVerdict.resumo);
-          return;
-        }
-        sendStatus(siteKey, 'ai_verdict', resultVerdict);
-      }
-      await sleep(500);
-
-      /* Alguns desses portais mostram a "situação" numa primeira consulta e
-         só geram o PDF depois de um ou mais cliques extras — a Caixa, por
-         exemplo, usa um botão "Obter Certificado" nessa etapa, e pode ter
-         mais de uma confirmação em sequência. Repete a busca por um botão
-         de emitir/obter/confirmar até achar um jeito de baixar ou esgotar
-         as tentativas, em vez de assumir que é sempre um clique só. */
-      const MAX_EMIT_STEPS = 3;
-      for (let step = 0; step < MAX_EMIT_STEPS; step++) {
-        if (findDownloadTrigger()) break;
-        const emitBtn = resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS]));
-        if (!emitBtn || !isVisible(emitBtn) || emitBtn.disabled) break;
-        recordDebug(siteKey, 'emit_button_found', `"${textOf(emitBtn)}" (${elementToSelector(emitBtn)}) [passo ${step + 1}/${MAX_EMIT_STEPS}]`);
-        sendStatus(siteKey, 'emitting');
-        emitBtn.click();
-        await waitFor(
-          () => findDownloadTrigger() || resolveElement('emitButton', siteKey, selectorOverrides, () => findButtonHeuristic([EMIT_STEP_TEXT_HINTS])),
-          { timeout: 20000, interval: 500 }
-        );
-      }
-
-      const trigger = resolveElement('downloadTrigger', siteKey, selectorOverrides, findDownloadTrigger);
-      if (!trigger) {
-        if (checkEmailSentFallback()) return;
-        recordDebug(siteKey, 'download_trigger_missing', 'Nenhum link .pdf nem botão de baixar/salvar/imprimir encontrado.', true);
-        sendStatus(siteKey, 'manual_save_needed');
-        return;
-      }
-      recordDebug(siteKey, 'download_trigger_found', elementToSelector(trigger.el || trigger));
-
-      const el = trigger.el || trigger;
-      const href = el.tagName === 'A' ? el.href : null;
-
-      if (href && /\.pdf($|\?)/i.test(href)) {
-        const { base64, mime } = await fetchAsBase64(href);
-        browser.runtime.sendMessage({ type: 'DOWNLOAD_BLOB', siteKey, cnpj, dataBase64: base64, mime }).catch(() => {});
-        sendStatus(siteKey, 'downloaded');
-        return;
-      }
-
-      el.click();
-      await sleep(1500);
-
-      const blobLink = Array.from(document.querySelectorAll('a[href^="blob:"], embed[src^="blob:"], iframe[src^="blob:"]')).find(isVisible);
-      const blobUrl = blobLink && (blobLink.href || blobLink.src);
-      if (blobUrl) {
-        const { base64, mime } = await fetchAsBase64(blobUrl);
-        browser.runtime.sendMessage({ type: 'DOWNLOAD_BLOB', siteKey, cnpj, dataBase64: base64, mime }).catch(() => {});
-        sendStatus(siteKey, 'downloaded');
-        return;
-      }
-
-      if (checkEmailSentFallback()) return;
-      sendStatus(siteKey, 'manual_save_needed');
+      await processResult(siteKey, cnpj, selectorOverrides);
     } catch (err) {
       sendStatus(siteKey, 'error', String(err && err.message ? err.message : err));
     }

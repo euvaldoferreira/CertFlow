@@ -40,14 +40,74 @@ const SITES = {
     delivery: 'email', // não gera arquivo pra baixar — o site manda por e-mail
   },
   simples: {
-    label: 'Simples Nacional - Certidão de Regularidade',
-    url: 'https://www8.receita.fazenda.gov.br/simplesnacional/controleAcesso/Autentica.aspx?id=16',
-    mode: 'manual', // exige login gov.br — a extensão não mexe nisso
+    label: 'Simples Nacional - Consulta Optantes',
+    fileTag: 'SimplesNacional-consulta-optantes',
+    /* URL final do formulário (a página "aplicacoes.aspx?id=21" só carrega
+       isso dentro de um iframe que dá um meta-refresh pra cá) — evita
+       depender do iframe/redirecionamento e vai direto ao formulário. */
+    url: 'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes',
+    mode: 'auto',
   },
 };
 const DEFAULT_SELECTED_SITES = ['rfb', 'caixa'];
 
 let currentRun = null;
+let popupWindowId = null;
+
+/* Um popup padrão (default_popup) é ancorado pelo próprio navegador perto
+   do ícone da extensão — não dá pra reposicionar nem redimensionar por
+   CSS. Por isso o manifest não declara default_popup: o clique no ícone
+   cai aqui, e abrimos a mesma popup/popup.html como uma janela normal,
+   centralizada e ocupando metade da tela. */
+async function getScreenBounds() {
+  try {
+    if (browser.system && browser.system.display && browser.system.display.getInfo) {
+      const displays = await browser.system.display.getInfo();
+      const primary = displays.find((d) => d.isPrimary) || displays[0];
+      if (primary) return primary.workArea || primary.bounds;
+    }
+  } catch (err) {
+    /* system.display pode não estar disponível (permissão negada, versão
+       antiga do navegador) — cai no fallback abaixo em vez de travar. */
+  }
+  const current = await browser.windows.getCurrent();
+  return { left: 0, top: 0, width: current.width || 1280, height: current.height || 800 };
+}
+
+async function openPopupWindow() {
+  if (popupWindowId != null) {
+    const existing = await browser.windows.get(popupWindowId).catch(() => null);
+    if (existing) {
+      await browser.windows.update(popupWindowId, { focused: true });
+      return;
+    }
+    popupWindowId = null;
+  }
+
+  const bounds = await getScreenBounds();
+  const width = Math.round(bounds.width * 0.5);
+  const height = Math.round(bounds.height * 0.5);
+  const left = Math.round((bounds.left || 0) + (bounds.width - width) / 2);
+  const top = Math.round((bounds.top || 0) + (bounds.height - height) / 2);
+
+  const win = await browser.windows.create({
+    url: browser.runtime.getURL('popup/popup.html'),
+    type: 'popup',
+    width,
+    height,
+    left,
+    top,
+  });
+  popupWindowId = win.id;
+}
+
+browser.action.onClicked.addListener(() => {
+  openPopupWindow();
+});
+
+browser.windows.onRemoved.addListener((id) => {
+  if (id === popupWindowId) popupWindowId = null;
+});
 
 function addLog(message, level = 'info') {
   if (!currentRun) return;

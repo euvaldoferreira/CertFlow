@@ -11,7 +11,7 @@
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'RUN_JOB' && msg.siteKey === SITE_KEY) {
       window.__certflowAutomatedRun = true;
-      CertFlow.runFlow(SITE_KEY, msg.cnpj);
+      CertFlow.runFlow(SITE_KEY, msg.cnpj, { forceEmitNew: msg.forceEmitNew });
       sendResponse({ ok: true });
     }
     return undefined;

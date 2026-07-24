@@ -107,13 +107,23 @@ o resultado da consulta, antes de procurar o link de download.
 ## Certidões com comportamento diferente
 
 **RFB (Pessoa Jurídica)**: quando já existe uma certidão válida emitida para o CNPJ, o site mostra
-"Certidão Válida Encontrada" em vez de oferecer emissão direta. Diferente das outras situações, aqui a
-extensão **não** clica em "Emitir Nova Certidão" — clica em "Consultar", escolhe a opção "data de
-validade" na tela seguinte (clicando na label, não só no `<input type="radio">` escondido por trás) e
-preenche o período de hoje até 90 dias à frente, depois clica em "Consultar Certidão" para chegar à
-certidão de verdade e seguir o download normalmente. O campo de data final tem `name="dataFinal"`, mas o
-de data inicial não tem `name` nenhum, só um id gerado pelo Angular — por isso os dois são achados juntos,
-usando a posição do `dataFinal` como referência.
+"Certidão Válida Encontrada" em vez de oferecer emissão direta. O que a extensão faz nesse caso é
+**configurável** — em Configurações ("Certidão já existente (RFB)") ou direto no popup, na hora de
+emitir:
+
+- **"Reaproveitar certidão já existente, se válida"** (ligado por padrão): se desligado, a extensão
+  sempre clica em "Emitir Nova Certidão", mesmo que já exista uma válida.
+- **"Validade mínima restante (dias)"** (30 por padrão): mesmo com o reaproveitamento ligado, a extensão
+  só reaproveita se a certidão encontrada ainda for válida por pelo menos esse número de dias. Se não for
+  (ou se nenhuma certidão "válida" for encontrada na lista), ela recarrega a aba e refaz o fluxo do zero,
+  dessa vez indo direto para "Emitir Nova Certidão".
+
+Quando o reaproveitamento é tentado, o fluxo é: clica em "Consultar" (não em "Emitir Nova Certidão"),
+escolhe a opção "data de validade" na tela seguinte (clicando na label, não só no `<input type="radio">`
+escondido por trás) e preenche o período de hoje até 90 dias à frente, depois clica em "Consultar
+Certidão". O campo de data final tem `name="dataFinal"`, mas o de data inicial não tem `name` nenhum, só
+um id gerado pelo Angular — por isso os dois são achados juntos, usando a posição do `dataFinal` como
+referência.
 
 "Consultar Certidão" não abre a certidão direto — devolve uma **lista** ("Relação das certidões emitidas
 por data de validade"), cada linha com uma situação (válida/inválida) e um botão "Segunda Via" que gera o

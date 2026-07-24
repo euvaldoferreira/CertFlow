@@ -553,6 +553,15 @@ async function handleCsStatus(msg, sender) {
     case 'error':
       failJob(msg.siteKey, msg.detail || 'erro desconhecido');
       break;
+    case 'restart_for_emit_new':
+      /* A certidão existente não atendia à validade mínima configurada —
+         recarrega a aba pra refazer o fluxo do zero, dessa vez indo direto
+         para "Emitir Nova Certidão" (o flag sobrevive ao reload porque
+         currentRun.jobs vive no background, não na aba). */
+      job.forceEmitNew = true;
+      addLog(`${site.label}: certidão existente não atende à validade mínima configurada — emitindo uma nova.`, 'warn');
+      await browser.tabs.reload(job.tabId).catch(() => {});
+      break;
     default:
       break;
   }
@@ -594,7 +603,9 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'CS_READY': {
         const found = currentRun && currentRun.status === 'running' ? findJobByTabId(sender.tab?.id) : null;
         if (found && found.siteKey === msg.siteKey && found.job.status === 'running') {
-          browser.tabs.sendMessage(sender.tab.id, { type: 'RUN_JOB', siteKey: msg.siteKey, cnpj: currentRun.cnpj }).catch(() => {});
+          browser.tabs
+            .sendMessage(sender.tab.id, { type: 'RUN_JOB', siteKey: msg.siteKey, cnpj: currentRun.cnpj, forceEmitNew: !!found.job.forceEmitNew })
+            .catch(() => {});
         }
         sendResponse({ ok: true });
         break;

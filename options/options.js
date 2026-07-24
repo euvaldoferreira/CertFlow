@@ -256,6 +256,25 @@
     alert('Configuração salva.');
   });
 
+  async function loadReuseCertidaoConfig() {
+    const { reuseExistingCertidao, reuseExistingCertidaoMinDays } = await browser.storage.local.get([
+      'reuseExistingCertidao',
+      'reuseExistingCertidaoMinDays',
+    ]);
+    document.getElementById('reuse-existing-certidao-enabled').checked = reuseExistingCertidao !== false;
+    document.getElementById('reuse-existing-certidao-min-days').value = Number.isFinite(reuseExistingCertidaoMinDays)
+      ? reuseExistingCertidaoMinDays
+      : 30;
+  }
+
+  document.getElementById('save-reuse-certidao-btn').addEventListener('click', async () => {
+    const reuseExistingCertidao = document.getElementById('reuse-existing-certidao-enabled').checked;
+    const minDaysRaw = Number(document.getElementById('reuse-existing-certidao-min-days').value);
+    const reuseExistingCertidaoMinDays = Number.isFinite(minDaysRaw) && minDaysRaw >= 0 ? minDaysRaw : 30;
+    await browser.storage.local.set({ reuseExistingCertidao, reuseExistingCertidaoMinDays });
+    alert('Configuração salva.');
+  });
+
   async function applyAiField(siteKey, field, selector) {
     const { selectorOverrides = {}, aiAppliedOverrides = {} } = await browser.storage.local.get(['selectorOverrides', 'aiAppliedOverrides']);
     selectorOverrides[siteKey] = selectorOverrides[siteKey] || {};
@@ -390,6 +409,7 @@
   loadAiConfig();
   loadTaskMiningConfig();
   loadVerboseDiagnosticsConfig();
+  loadReuseCertidaoConfig();
   renderAiSuggestions();
   setInterval(refreshTabHints, 3000);
 })();

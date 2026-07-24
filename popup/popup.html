@@ -19,6 +19,19 @@
     <label class="section-label">Certidões a emitir</label>
     <div id="site-checkboxes" aria-label="Certidões a emitir"></div>
 
+    <label class="section-label">Certidão já existente (RFB)</label>
+    <div class="reuse-certidao-row">
+      <label class="site-checkbox">
+        <input type="checkbox" id="reuse-existing-certidao-enabled" />
+        <span>Reaproveitar se válida</span>
+      </label>
+      <label class="reuse-days-label">
+        <span>mín.</span>
+        <input type="number" id="reuse-existing-certidao-min-days" min="0" step="1" />
+        <span>dias</span>
+      </label>
+    </div>
+
     <div class="actions">
       <button type="submit" id="start-btn">Emitir certidões</button>
       <button type="button" id="cancel-btn" hidden>Cancelar</button>

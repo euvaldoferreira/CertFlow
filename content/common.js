@@ -622,12 +622,32 @@
     return radio ? { label: target, radio } : null;
   }
 
+  const EMITIR_NOVA_HINTS = /emitir\s+nova\s+certid[aã]o/i;
+
+  /* RFB: na tela "Certidão Válida Encontrada", clica direto em "Emitir Nova
+     Certidão" — usado quando o usuário desativou o reaproveitamento de
+     certidão existente, ou quando a(s) já existente(s) não atendem à
+     validade mínima configurada. */
+  async function handleRfbEmitNovaCertidao(siteKey) {
+    const btn = await waitFor(() => findButtonHeuristic([EMITIR_NOVA_HINTS]), { timeout: 8000, interval: 300 });
+    if (!btn) {
+      recordDebug(siteKey, 'emitir_nova_certidao_missing', 'Botão "Emitir Nova Certidão" não encontrado.', true);
+      return false;
+    }
+    recordDebug(siteKey, 'emitir_nova_certidao_click', `"${textOf(btn)}" (${elementToSelector(btn)})`);
+    btn.click();
+    await sleep(500);
+    return true;
+  }
+
   /* RFB: na tela "Certidão Válida Encontrada", clica em "Consultar" (não
      em "Emitir Nova Certidão"), escolhe a opção "data de validade" e
      preenche o período de hoje até 90 dias à frente, depois clica em
      "Consultar Certidão" — só então a certidão de verdade aparece pra
-     download, seguindo o fluxo normal do resto de processResult(). */
-  async function handleRfbExistingCertidaoFlow(siteKey) {
+     download, seguindo o fluxo normal do resto de processResult(). Repassa
+     minDays para handleRfbCertidoesListFlow decidir se a certidão achada
+     na lista tem validade suficiente pra valer a pena reaproveitar. */
+  async function handleRfbExistingCertidaoFlow(siteKey, minDays) {
     const consultarBtn = await waitFor(() => findButtonHeuristic([/^consultar$/i, /consultar/i]), { timeout: 8000, interval: 300 });
     if (!consultarBtn) {
       recordDebug(siteKey, 'certidao_valida_consultar_missing', 'Botão "Consultar" não encontrado na tela de certidão já existente.', true);
@@ -729,7 +749,7 @@
     recordDebug(siteKey, 'certidao_valida_consultar_certidao_click', `"${textOf(consultarCertidaoBtn)}"`);
     await sleep(500);
 
-    return handleRfbCertidoesListFlow(siteKey);
+    return handleRfbCertidoesListFlow(siteKey, minDays);
   }
 
   const CERTIDOES_LIST_HINTS = /rela[cç][aã]o\s+das\s+certid[oõ]es\s+emitidas\s+por\s+data\s+de\s+validade/i;
@@ -783,7 +803,7 @@
     return list.filter((el) => !list.some((other) => other !== el && el.contains(other)));
   }
 
-  async function handleRfbCertidoesListFlow(siteKey) {
+  async function handleRfbCertidoesListFlow(siteKey, minDays) {
     const found = await waitFor(() => (CERTIDOES_LIST_HINTS.test(document.body.innerText || '') ? true : null), {
       timeout: 15000,
       interval: 400,
@@ -829,6 +849,21 @@
     if (!bestRow) {
       recordDebug(siteKey, 'certidoes_lista_data_missing', 'Não conseguiu extrair datas das linhas válidas encontradas.', true);
       return false;
+    }
+
+    /* Só reaproveita se a validade restante da melhor certidão encontrada
+       atender ao mínimo configurado pelo usuário (Configurações ou
+       popup) — evita pegar uma certidão que já está prestes a vencer. */
+    const today = new Date();
+    const minValidDate = new Date(today.getTime() + (minDays || 0) * 24 * 60 * 60 * 1000);
+    if (bestDate < minValidDate) {
+      recordDebug(
+        siteKey,
+        'certidoes_validade_insuficiente',
+        `Melhor certidão válida até ${bestDate.toLocaleDateString('pt-BR')} — abaixo do mínimo configurado de ${minDays} dias (precisaria valer até ${minValidDate.toLocaleDateString('pt-BR')}).`,
+        true
+      );
+      return 'insufficient_validity';
     }
 
     /* Confirmado em log real: a RFB usa ngx-datatable, onde cada linha é
@@ -887,7 +922,7 @@
      recarregando a página inteira e reinjetando o content script do zero
      numa página que não tem mais o formulário de CNPJ — nesse caso não dá
      pra "preencher de novo", só processar o que já está visível. */
-  async function processResult(siteKey, cnpj, selectorOverrides) {
+  async function processResult(siteKey, cnpj, selectorOverrides, forceEmitNew) {
     recordDebug(siteKey, 'result_detected', `URL: ${location.href}`);
     if (verboseDiagnosticsEnabled) {
       const matched = identifyMatchedResultHint();
@@ -923,15 +958,52 @@
       return;
     }
 
-    /* Não retorna aqui: depois de completar esse sub-fluxo, a certidão de
-       verdade deve estar na tela, e o resto de processResult (procurar o
-       trigger de download etc.) segue normalmente. */
+    /* Não retorna aqui (exceto nos casos de erro/reinício): depois de
+       completar o sub-fluxo escolhido, a certidão de verdade deve estar
+       na tela, e o resto de processResult (procurar o trigger de
+       download etc.) segue normalmente. */
     if (classification === 'certidao_valida_existente') {
-      recordDebug(siteKey, 'certidao_valida_encontrada', 'Certidão válida já existente — seguindo Consultar → data de validade → Consultar Certidão.', true);
-      const handled = await handleRfbExistingCertidaoFlow(siteKey);
-      if (!handled) {
-        sendStatus(siteKey, 'error', 'Certidão válida já existente, mas não foi possível seguir o fluxo de consulta por data de validade. Verifique a página ou ajuste os seletores.');
-        return;
+      const { reuseExistingCertidao, reuseExistingCertidaoMinDays } = await browser.storage.local.get([
+        'reuseExistingCertidao',
+        'reuseExistingCertidaoMinDays',
+      ]);
+      /* Reaproveitar é o padrão (true) a menos que o usuário desligue
+         explicitamente nas Configurações ou no popup. */
+      const wantsReuse = reuseExistingCertidao !== false;
+      const minDays = Number.isFinite(reuseExistingCertidaoMinDays) ? reuseExistingCertidaoMinDays : 30;
+
+      if (forceEmitNew || !wantsReuse) {
+        recordDebug(
+          siteKey,
+          'certidao_valida_emitindo_nova',
+          forceEmitNew
+            ? 'Certidão existente não atendia ao critério de validade mínima configurado — emitindo uma nova.'
+            : 'Reaproveitar certidão existente está desativado — emitindo uma nova.',
+          true
+        );
+        const emitted = await handleRfbEmitNovaCertidao(siteKey);
+        if (!emitted) {
+          sendStatus(siteKey, 'error', 'Certidão válida já existente, mas não foi possível clicar em "Emitir Nova Certidão".');
+          return;
+        }
+        /* Segue para o fluxo normal de emissão abaixo (emit-loop + busca
+           de download), igual a qualquer outra certidão nova. */
+      } else {
+        recordDebug(siteKey, 'certidao_valida_encontrada', `Certidão válida já existente — seguindo Consultar → data de validade → Consultar Certidão (validade mínima exigida: ${minDays} dias).`, true);
+        const handled = await handleRfbExistingCertidaoFlow(siteKey, minDays);
+        if (handled === 'insufficient_validity') {
+          /* A(s) certidão(ões) encontrada(s) não têm validade suficiente —
+             recarrega a aba e refaz o fluxo, dessa vez indo direto para
+             "Emitir Nova Certidão" (ver background.js: 'restart_for_emit_new'
+             marca job.forceEmitNew e o CS_READY seguinte já manda esse
+             sinal no RUN_JOB). */
+          sendStatus(siteKey, 'restart_for_emit_new');
+          return;
+        }
+        if (!handled) {
+          sendStatus(siteKey, 'error', 'Certidão válida já existente, mas não foi possível seguir o fluxo de consulta por data de validade. Verifique a página ou ajuste os seletores.');
+          return;
+        }
       }
     }
 
@@ -1011,7 +1083,8 @@
      então localiza um jeito de salvar o PDF — link direto (download
      silencioso) ou botão de imprimir/baixar (fallback pedindo 1 clique ao
      usuário via background). */
-  async function runFlow(siteKey, cnpj) {
+  async function runFlow(siteKey, cnpj, options) {
+    const forceEmitNew = !!(options && options.forceEmitNew);
     try {
       const { selectorOverrides = {}, verboseDiagnostics } = await browser.storage.local.get(['selectorOverrides', 'verboseDiagnostics']);
       verboseDiagnosticsEnabled = !!verboseDiagnostics;
@@ -1033,7 +1106,7 @@
       }
       if (cnpjAlreadyMissing && detectResult()) {
         recordDebug(siteKey, 'result_already_present', 'Resultado já visível ao iniciar, sem campo de CNPJ (provável reinjeção após navegação de formulário).');
-        await processResult(siteKey, cnpj, selectorOverrides);
+        await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
         return;
       }
 
@@ -1086,7 +1159,7 @@
           reportUnavailable(siteKey);
           return;
         }
-        await processResult(siteKey, cnpj, selectorOverrides);
+        await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
         return;
       }
 
@@ -1171,7 +1244,7 @@
         return;
       }
 
-      await processResult(siteKey, cnpj, selectorOverrides);
+      await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
     } catch (err) {
       sendStatus(siteKey, 'error', String(err && err.message ? err.message : err));
     }

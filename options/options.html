@@ -47,6 +47,30 @@
     <p class="tab-hint" data-site-hint="rfb">Nenhuma aba do site aberta no momento.</p>
   </section>
 
+  <section class="reuse-certidao">
+    <h2>Certidão já existente (RFB)</h2>
+    <p class="intro">
+      Quando a Receita Federal indica que já existe uma certidão válida para o CNPJ, a extensão pode
+      reaproveitá-la (consultando por data de validade e clicando em "Segunda Via") em vez de emitir uma
+      nova. Se a certidão encontrada não tiver validade restante suficiente, ou se isso estiver
+      desligado, a extensão emite uma nova mesmo assim.
+    </p>
+    <div class="field-row checkbox-row">
+      <label for="reuse-existing-certidao-enabled">Reaproveitar certidão já existente, se válida</label>
+      <input type="checkbox" id="reuse-existing-certidao-enabled" />
+    </div>
+    <div class="field-row">
+      <label for="reuse-existing-certidao-min-days">Validade mínima restante (dias)</label>
+      <input type="number" id="reuse-existing-certidao-min-days" min="0" step="1" placeholder="30" />
+    </div>
+    <div class="actions-row">
+      <button id="save-reuse-certidao-btn" type="button">Salvar</button>
+    </div>
+    <p class="tab-hint">
+      Essa mesma escolha também pode ser ajustada na hora de emitir, direto no popup.
+    </p>
+  </section>
+
   <section class="site-config" data-site="caixa">
     <h2>Caixa — Certificado de Regularidade do FGTS</h2>
     <div class="field-row" data-kind="cnpjInput">

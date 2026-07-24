@@ -8,6 +8,8 @@
   const openOptions = document.getElementById('open-options');
   const siteCheckboxes = document.getElementById('site-checkboxes');
   const stepsSection = document.getElementById('steps');
+  const reuseEnabled = document.getElementById('reuse-existing-certidao-enabled');
+  const reuseMinDays = document.getElementById('reuse-existing-certidao-min-days');
 
   let availableSites = {};
 
@@ -123,6 +125,23 @@
     renderRunning(run);
   }
 
+  async function loadReuseCertidaoConfig() {
+    const { reuseExistingCertidao, reuseExistingCertidaoMinDays } = await browser.storage.local.get([
+      'reuseExistingCertidao',
+      'reuseExistingCertidaoMinDays',
+    ]);
+    reuseEnabled.checked = reuseExistingCertidao !== false;
+    reuseMinDays.value = Number.isFinite(reuseExistingCertidaoMinDays) ? reuseExistingCertidaoMinDays : 30;
+  }
+
+  reuseEnabled.addEventListener('change', () => {
+    browser.storage.local.set({ reuseExistingCertidao: reuseEnabled.checked });
+  });
+  reuseMinDays.addEventListener('change', () => {
+    const value = Number(reuseMinDays.value);
+    browser.storage.local.set({ reuseExistingCertidaoMinDays: Number.isFinite(value) && value >= 0 ? value : 30 });
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const digits = CNPJUtil.onlyDigits(cnpjInput.value);
@@ -175,4 +194,5 @@
   }
 
   refresh();
+  loadReuseCertidaoConfig();
 })();

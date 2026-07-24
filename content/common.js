@@ -249,8 +249,17 @@
   }
 
   function detectCaptcha() {
+    /* Bug real confirmado por um usuário (RFB avisou "resolva o captcha"
+       sem nenhum captcha pra resolver): faltavam parênteses aqui — o jeito
+       antigo testava CAPTCHA_HINTS.test(f.title) mesmo quando o iframe
+       estava invisível, porque && tem precedência maior que ||. O selo do
+       reCAPTCHA (sempre presente numa página protegida, mas sem exigir
+       nenhuma ação do usuário na maioria dos casos) costuma ter um iframe
+       com title="reCAPTCHA" mesmo quando escondido via CSS — batia com o
+       padrão e disparava o aviso à toa. Agora as duas condições exigem
+       visibilidade. */
     const iframe = Array.from(document.querySelectorAll('iframe')).find(
-      (f) => isVisible(f) && CAPTCHA_HINTS.test(f.src || '') || CAPTCHA_HINTS.test(f.title || '')
+      (f) => isVisible(f) && (CAPTCHA_HINTS.test(f.src || '') || CAPTCHA_HINTS.test(f.title || ''))
     );
     if (iframe) return { present: true, el: iframe };
 
@@ -636,22 +645,24 @@
        name="dataFinal", mas o de data inicial não tem name (nem
        formcontrolname) nenhum — só um id gerado pelo Angular. Por isso a
        data inicial é achada por exclusão: o outro campo de texto com o
-       mesmo placeholder ("Selecione a data"), que não seja o dataFinal. */
-    const dataFinalInput = await waitFor(() => document.querySelector('input[name="dataFinal"]'), { timeout: 8000, interval: 300 });
-    if (!dataFinalInput) {
-      recordDebug(siteKey, 'certidao_valida_data_final_missing', 'Campo "dataFinal" não encontrado.', true);
-      return false;
-    }
-    const dataInicialInput = await waitFor(() => {
+       mesmo placeholder ("Selecione a data"), que não seja o dataFinal.
+       Um único waitFor exigindo os dois ao mesmo tempo (em vez de duas
+       buscas sequenciais) evita perder a data inicial numa corrida caso
+       ela renderize um instante depois da data final. */
+    const dateFields = await waitFor(() => {
       const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(
         (el) => isVisible(el) && /selecione a data/i.test(el.getAttribute('placeholder') || '')
       );
-      return candidates.find((el) => el !== dataFinalInput) || null;
-    }, { timeout: 8000, interval: 300 });
-    if (!dataInicialInput) {
-      recordDebug(siteKey, 'certidao_valida_data_inicial_missing', 'Campo de data inicial não encontrado (só achou dataFinal).', true);
+      if (candidates.length < 2) return null;
+      const final = candidates.find((el) => el.getAttribute('name') === 'dataFinal') || candidates[candidates.length - 1];
+      const initial = candidates.find((el) => el !== final);
+      return initial && final ? { initial, final } : null;
+    }, { timeout: 10000, interval: 300 });
+    if (!dateFields) {
+      recordDebug(siteKey, 'certidao_valida_datas_missing', 'Não achou os dois campos de data (esperava 2 inputs com placeholder "Selecione a data").', true);
       return false;
     }
+    const { initial: dataInicialInput, final: dataFinalInput } = dateFields;
 
     const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
     const today = new Date();

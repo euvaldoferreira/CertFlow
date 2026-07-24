@@ -728,6 +728,72 @@
     consultarCertidaoBtn.click();
     recordDebug(siteKey, 'certidao_valida_consultar_certidao_click', `"${textOf(consultarCertidaoBtn)}"`);
     await sleep(500);
+
+    return handleRfbCertidoesListFlow(siteKey);
+  }
+
+  const CERTIDOES_LIST_HINTS = /rela[cç][aã]o\s+das\s+certid[oõ]es\s+emitidas\s+por\s+data\s+de\s+validade/i;
+  const SEGUNDA_VIA_HINTS = /segunda\s*via|2\s*[ªa]\s*via/i;
+  const VALIDA_STATUS_HINTS = /\bv[aá]lida\b/i;
+  const BR_DATE_PATTERN = /(\d{2})\/(\d{2})\/(\d{4})/g;
+
+  /* "Consultar Certidão" (com data de validade) devolve uma LISTA de
+     certidões já emitidas nesse período, não a certidão direto — cada
+     linha tem uma situação (válida/inválida) e um botão "Segunda Via" que
+     gera o PDF daquela certidão específica. Escolhe a linha com situação
+     "válida" e a data de validade mais distante (a que fica valendo por
+     mais tempo), clica em "Segunda Via" dela, e deixa o resto de
+     processResult() (busca normal de download) assumir a partir daí —
+     sem isso, a extensão caía no fallback de salvar a lista inteira em
+     PDF, o que não é a certidão de verdade. */
+  async function handleRfbCertidoesListFlow(siteKey) {
+    const found = await waitFor(() => (CERTIDOES_LIST_HINTS.test(document.body.innerText || '') ? true : null), {
+      timeout: 15000,
+      interval: 400,
+    });
+    if (!found) {
+      recordDebug(siteKey, 'certidoes_lista_missing', 'Tela "Relação das certidões emitidas por data de validade" não detectada — seguindo fluxo normal mesmo assim.', true);
+      return true;
+    }
+
+    const rows = Array.from(document.querySelectorAll('tr')).filter((row) => {
+      const text = textOf(row);
+      return VALIDA_STATUS_HINTS.test(text) && BR_DATE_PATTERN.test(text);
+    });
+    if (!rows.length) {
+      recordDebug(siteKey, 'certidoes_lista_rows_missing', 'Nenhuma linha com situação "válida" e data encontrada na lista.', true);
+      return false;
+    }
+
+    let bestRow = null;
+    let bestDate = null;
+    for (const row of rows) {
+      const text = textOf(row);
+      const dates = Array.from(text.matchAll(BR_DATE_PATTERN)).map((m) => new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])));
+      if (!dates.length) continue;
+      const rowMaxDate = new Date(Math.max(...dates.map((d) => d.getTime())));
+      if (!bestDate || rowMaxDate > bestDate) {
+        bestDate = rowMaxDate;
+        bestRow = row;
+      }
+    }
+    if (!bestRow) {
+      recordDebug(siteKey, 'certidoes_lista_data_missing', 'Não conseguiu extrair datas das linhas válidas encontradas.', true);
+      return false;
+    }
+
+    const segundaViaBtn = Array.from(bestRow.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).find((el) =>
+      SEGUNDA_VIA_HINTS.test(textOf(el))
+    );
+    if (!segundaViaBtn) {
+      recordDebug(siteKey, 'certidoes_segunda_via_missing', 'Botão "Segunda Via" não encontrado na linha escolhida.', true);
+      return false;
+    }
+
+    const fmt = (d) => d.toLocaleDateString('pt-BR');
+    recordDebug(siteKey, 'certidoes_segunda_via_click', `Linha escolhida (validade até ${fmt(bestDate)}): "${textOf(segundaViaBtn)}" (${elementToSelector(segundaViaBtn)})`, true);
+    segundaViaBtn.click();
+    await sleep(500);
     return true;
   }
 

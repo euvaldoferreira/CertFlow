@@ -115,6 +115,14 @@ certidão de verdade e seguir o download normalmente. O campo de data final tem 
 de data inicial não tem `name` nenhum, só um id gerado pelo Angular — por isso os dois são achados juntos,
 usando a posição do `dataFinal` como referência.
 
+"Consultar Certidão" não abre a certidão direto — devolve uma **lista** ("Relação das certidões emitidas
+por data de validade"), cada linha com uma situação (válida/inválida) e um botão "Segunda Via" que gera o
+PDF daquela linha especificamente. A extensão escolhe a linha com situação "válida" e a data de validade
+mais distante (a que fica valendo por mais tempo) e clica em "Segunda Via" dela — sem isso, caía no
+fallback de salvar a lista inteira em PDF, que não é a certidão. Essa parte ainda não foi confirmada por
+um teste ao vivo (só implementada com base na descrição da tela, sem um snapshot real da tabela) — se a
+extensão não achar a lista ou a linha certa, o log de navegação mostra exatamente em qual passo parou.
+
 Essa busca demorou algumas rodadas de diagnóstico pra acertar: por várias tentativas os campos "não eram
 achados" mesmo esperando bastante, até que a instrumentação revelou a causa real — não era demora nem
 falha no clique, era um bug de seletor. `input[type="text"]` é um seletor CSS que exige o **atributo**

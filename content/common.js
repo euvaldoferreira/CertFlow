@@ -831,17 +831,25 @@
       return false;
     }
 
-    /* Se o botão não estiver dentro do próprio elemento identificado como
-       "linha", tenta no elemento pai — o limite exato da linha pode não
-       bater exatamente com onde o botão de ação realmente está aninhado. */
+    /* Confirmado em log real: a RFB usa ngx-datatable, onde cada linha é
+       dividida em vários div.datatable-row-group IRMÃOS (colunas), não
+       aninhados — o grupo com "válida"+data pode não ser o mesmo grupo
+       que tem o botão de ação. Sobe até achar o container da linha
+       inteira (classe contendo "body-row" ou "row-wrapper", padrão do
+       ngx-datatable e de bibliotecas parecidas) antes de procurar o
+       botão, em vez de só olhar o grupo específico ou seu pai imediato. */
+    const trueRow = bestRow.closest('[class*="body-row"], [class*="row-wrapper"]') || bestRow;
     const findSegundaVia = (scope) =>
       Array.from(scope.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).find((el) => SEGUNDA_VIA_HINTS.test(textOf(el)));
-    const segundaViaBtn = findSegundaVia(bestRow) || (bestRow.parentElement ? findSegundaVia(bestRow.parentElement) : null);
+    const segundaViaBtn =
+      findSegundaVia(trueRow) ||
+      findSegundaVia(bestRow) ||
+      (bestRow.parentElement ? findSegundaVia(bestRow.parentElement) : null);
     if (!segundaViaBtn) {
       recordDebug(
         siteKey,
         'certidoes_segunda_via_missing',
-        `Botão "Segunda Via" não encontrado na linha escolhida (${elementToSelector(bestRow)}) nem no elemento pai.`,
+        `Botão "Segunda Via" não encontrado na linha escolhida (${elementToSelector(bestRow)}), na linha inteira (${elementToSelector(trueRow)}) nem no elemento pai.`,
         true
       );
       return false;

@@ -120,8 +120,12 @@ por data de validade"), cada linha com uma situação (válida/inválida) e um b
 PDF daquela linha especificamente. A extensão acha a tela (confirmado em log real) e procura a "linha" da
 certidão de forma flexível — não assume que é um `<tr>` de tabela HTML de verdade, sobe a partir de onde
 o texto "válida" aparece até achar o menor ancestral que também contenha uma data — escolhe a de validade
-mais distante e clica em "Segunda Via" dela (procurando também no elemento pai, caso o botão fique fora
-do limite identificado como "linha"). A extração de datas usa dois regexes separados de propósito: reusar
+mais distante e clica em "Segunda Via" dela. Confirmado em log real: a RFB usa **ngx-datatable**, onde
+cada linha é dividida em vários `div.datatable-row-group` **irmãos** (colunas), não aninhados — o grupo
+com "válida"+data pode não ser o mesmo que tem o botão de ação. Por isso a busca do botão sobe até achar
+o container da linha inteira (classe contendo `body-row` ou `row-wrapper`) antes de procurar "Segunda
+Via", em vez de olhar só o grupo específico ou seu pai imediato. A extração de datas usa dois regexes
+separados de propósito: reusar
 o mesmo objeto com flag `/g` entre `.test()` (checagem booleana) e `matchAll()` (extração) causa falso-
 negativo imprevisível, porque um regex global guarda `lastIndex` entre chamadas de `.test()` — reusar o
 mesmo objeto pra checar strings diferentes faz ele "lembrar" uma posição da string anterior (bug real

@@ -42,10 +42,11 @@ const SITES = {
   simples: {
     label: 'Simples Nacional - Consulta Optantes',
     fileTag: 'SimplesNacional-consulta-optantes',
-    /* URL final do formulário (a página "aplicacoes.aspx?id=21" só carrega
-       isso dentro de um iframe que dá um meta-refresh pra cá) — evita
-       depender do iframe/redirecionamento e vai direto ao formulário. */
-    url: 'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes',
+    /* Página oficial da consulta — o formulário de verdade só aparece
+       dentro de um iframe interno (que ainda dá um meta-refresh para
+       consopt.www8.receita.fazenda.gov.br) — por isso o content script
+       desse domínio precisa rodar com all_frames:true (ver manifests). */
+    url: 'https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21',
     mode: 'auto',
   },
 };

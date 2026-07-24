@@ -132,10 +132,10 @@
     </div>
     <p class="tab-hint" data-site-hint="simples">Nenhuma aba do site aberta no momento.</p>
     <p class="tab-hint">
-      É a Consulta Optantes (não exige login), num subdomínio próprio
-      (<code>consopt.www8.receita.fazenda.gov.br</code>) — o formulário real fica lá, não na página
-      inicial do Simples Nacional. O captcha é por hCaptcha; ao resolvê-lo, o site recarrega a página
-      inteira com o resultado (a extensão já lida com isso automaticamente).
+      É a Consulta Optantes (não exige login). O formulário real fica num iframe interno que carrega de
+      <code>consopt.www8.receita.fazenda.gov.br</code> — a extensão injeta o script direto nesse iframe.
+      O captcha é por hCaptcha; ao resolvê-lo, o site recarrega a página inteira com o resultado (a
+      extensão já lida com isso automaticamente).
     </p>
   </section>
 

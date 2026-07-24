@@ -625,13 +625,19 @@
       /* Alguns sites (ex.: Simples Nacional) fazem um POST de formulário de
          verdade em vez de atualização via ajax — o que reinjeta o content
          script do zero numa página que já mostra o resultado, sem mais o
-         formulário. Detecta esse caso antes de procurar o campo de CNPJ. */
-      if (detectTemporarilyUnavailable()) {
+         formulário. Detecta esse caso ANTES de procurar o campo de CNPJ —
+         mas só quando o campo realmente não existe mais: várias páginas
+         iniciais (ex.: a da Caixa) têm texto explicativo tipo "Certificado
+         de Regularidade do FGTS" na descrição do serviço, o que bateria com
+         RESULT_TEXT_HINTS mesmo sem nenhuma consulta ter sido feita ainda.
+         Exigir a ausência do campo de CNPJ evita esse falso positivo. */
+      const cnpjAlreadyMissing = !resolveElement('cnpjInput', siteKey, selectorOverrides, findCnpjInputHeuristic);
+      if (cnpjAlreadyMissing && detectTemporarilyUnavailable()) {
         reportUnavailable(siteKey);
         return;
       }
-      if (detectResult()) {
-        recordDebug(siteKey, 'result_already_present', 'Resultado já visível ao iniciar (provável reinjeção após navegação de formulário).');
+      if (cnpjAlreadyMissing && detectResult()) {
+        recordDebug(siteKey, 'result_already_present', 'Resultado já visível ao iniciar, sem campo de CNPJ (provável reinjeção após navegação de formulário).');
         await processResult(siteKey, cnpj, selectorOverrides);
         return;
       }

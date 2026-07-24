@@ -6,9 +6,9 @@ escolhe quais quer emitir (a escolha fica memorizada para a próxima vez):
 1. **Certidão de Regularidade Fiscal** — Receita Federal (`servicos.receitafederal.gov.br/servico/certidoes`)
 2. **Certificado de Regularidade do FGTS (CRF)** — Caixa, via Consulta Regularidade do Empregador (`consulta-crf.caixa.gov.br`)
 3. **CNDT — Certidão Negativa de Débitos Trabalhistas** — TST (`cndt-certidao.tst.jus.br`)
-4. **Simples Nacional — Consulta Optantes** (`consopt.www8.receita.fazenda.gov.br`) — não é a certidão
-   formal (essa exige login gov.br e não é automatizável), mas a consulta pública que informa se o CNPJ
-   é optante pelo Simples Nacional
+4. **Simples Nacional — Consulta Optantes** (`www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21`)
+   — não é a certidão formal (essa exige login gov.br e não é automatizável), mas a consulta pública que
+   informa se o CNPJ é optante pelo Simples Nacional
 
 Em todos os quatro, o fluxo abre a aba, preenche o CNPJ, envia o formulário e salva o PDF (ou a página)
 gerado automaticamente em `Downloads/CertFlow/<CNPJ>/`. **O único passo manual é resolver o captcha,
@@ -111,19 +111,19 @@ de entrada (e o spam) do e-mail cadastrado.
 
 **Simples Nacional**: a certidão formal de regularidade desse portal fica atrás de login com conta
 gov.br, fora do padrão automatizável das demais — por isso a extensão usa a **Consulta Optantes**
-(pública, sem login), que informa se o CNPJ é optante pelo Simples Nacional. O formulário de verdade
-fica num subdomínio próprio (`consopt.www8.receita.fazenda.gov.br/consultaoptantes` — a página inicial
-`www8.receita.fazenda.gov.br/simplesnacional/...` só chega lá por um iframe com redirecionamento, que a
-extensão evita abrindo direto a URL final) e usa hCaptcha: ao resolver o captcha, o próprio site recarrega
-a página inteira com o resultado (não é uma atualização via ajax) — a extensão detecta essa recarga e
-processa o resultado já visível, em vez de tentar preencher o CNPJ de novo numa página que não tem mais
-formulário.
+(pública, sem login, `aplicacoes.aspx?id=21`), que informa se o CNPJ é optante pelo Simples Nacional. O
+formulário de verdade não fica na página inicial, e sim num **iframe interno** que carrega de
+`consopt.www8.receita.fazenda.gov.br` — por isso o content script desse domínio roda com
+`all_frames: true` no manifest, injetando direto no iframe assim que ele termina de carregar. O captcha
+é hCaptcha: ao resolvê-lo, o próprio site recarrega a página inteira com o resultado e o botão "Gerar
+PDF" (não é uma atualização via ajax) — a extensão detecta essa recarga (pela ausência do campo de CNPJ)
+e processa o resultado/PDF já visíveis, em vez de tentar preencher o CNPJ de novo numa página que não
+tem mais formulário.
 
-Como não é a "certidão" formal, essa consulta normalmente não tem um PDF para baixar — a extensão cai no
-mesmo salvamento manual usado quando nenhum site oferece um link direto (ver "Onde os arquivos são
-salvos" abaixo). O texto exato de sucesso da consulta ("optante"/"não optante pelo Simples Nacional")
-foi mapeado por conhecimento do serviço, não por um teste ao vivo (a consulta real exige resolver um
-captcha) — se a extensão não reconhecer o resultado nessa página, ajuste ou reporte para eu calibrar.
+O texto exato de sucesso da consulta ("optante"/"não optante pelo Simples Nacional") foi mapeado por
+conhecimento do serviço, não por um teste ao vivo ponta a ponta (a consulta real exige resolver um
+captcha) — se a extensão não reconhecer o resultado ou o botão "Gerar PDF" nessa página, ajuste ou
+reporte para eu calibrar.
 
 ## Quando o site diz "tente novamente mais tarde"
 

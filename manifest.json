@@ -69,7 +69,7 @@
       "matches": ["https://consopt.www8.receita.fazenda.gov.br/*"],
       "js": ["lib/cnpj.js", "content/common.js", "content/simples-nacional.js", "content/task-mining.js"],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true
     }
   ]
 }

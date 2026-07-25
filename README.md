@@ -75,6 +75,13 @@ arquivo fonte, rode o build de novo e clique em "Recarregar" na página de exten
 - Uma certidão que falhar (site indisponível após as tentativas automáticas, CNPJ bloqueado para aquele
   serviço, etc.) não impede as demais de concluir; o resumo final do popup mostra quais deram certo e
   quais falharam.
+- **Várias execuções em paralelo**: cada CNPJ é uma execução independente — abrir uma janela nova
+  (ícone da extensão ou seleção de texto) e emitir um CNPJ diferente enquanto outro ainda está rodando
+  funciona normalmente, sem um bloquear o outro nem compartilhar estado. Cada janela acompanha o CNPJ
+  que está no seu próprio campo: se você trocar o CNPJ digitado numa janela já aberta, ela passa a
+  mostrar o progresso daquela outra execução (se existir uma em andamento ou recém-concluída para ele).
+  Só é bloqueado iniciar o **mesmo** CNPJ duas vezes enquanto a primeira ainda está em andamento. O selo
+  no ícone da extensão mostra quantas execuções estão rodando no momento.
 
 ## Calibrando os seletores (importante na primeira execução)
 
@@ -425,9 +432,14 @@ fallback abaixo se realmente não detectar nenhum:
   abertas ao mesmo tempo, sem uma depender da outra), mensagens dos content scripts, downloads, retry
   automático por site (via `alarms`), modo manual (fecha aba = concluído), menu de contexto e a janela
   do popup (abre `popup/popup.html` como janela própria via `windows.create`, centralizada a 50% da tela
-  usando `system.display`, em vez do `default_popup` ancorado no ícone). Roda como `background.scripts`
-  no Firefox e como service worker no Chrome (o próprio arquivo detecta o ambiente e ajusta o
-  carregamento de `lib/`).
+  usando `system.display`, em vez do `default_popup` ancorado no ícone; cada clique/seleção abre uma
+  janela **nova**, nunca reaproveita uma existente). Roda como `background.scripts` no Firefox e como
+  service worker no Chrome (o próprio arquivo detecta o ambiente e ajusta o carregamento de `lib/`).
+  O estado de execução é o mapa `runs` (chaveado por CNPJ, não uma variável global única) — cada CNPJ
+  emitido é uma execução totalmente independente das demais, com suas próprias abas/jobs/log; só é
+  bloqueado iniciar o mesmo CNPJ duas vezes em paralelo. Cada janela de popup informa, em toda mensagem
+  (`GET_RUN_STATE`, `CANCEL_RUN`), qual CNPJ ela quer consultar/cancelar, e só reage a broadcasts
+  (`RUN_UPDATE`) do CNPJ que ela própria está mostrando.
 - `content/common.js` — heurísticas de DOM, detecção de captcha/resultado/indisponibilidade/envio por
   e-mail, modo "selecionar na página", fluxo genérico de preenchimento (`runFlow`).
 - `content/ai.js` — integração com o Gemini Nano (Chrome); não faz nada em navegadores sem o recurso.

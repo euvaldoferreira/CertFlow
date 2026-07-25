@@ -1,12 +1,15 @@
-/* Orquestra a execução: abre uma aba para cada certidão selecionada — todas
-   de uma vez, em paralelo, sem uma esperar a outra terminar — manda o
-   content script preencher o CNPJ (quando o site permite automação sem
-   login), aguarda captcha/resultado e salva o PDF gerado (ou confirma envio
-   por e-mail, dependendo do site). Uma certidão falhar não afeta as outras.
-   No Firefox, CNPJUtil vem de lib/cnpj.js carregado antes deste arquivo pelo
-   manifest ("background.scripts"). No Chrome, este arquivo roda sozinho
-   como service worker (MV3 só aceita um "service_worker"), então ele mesmo
-   importa lib/cnpj.js — só faz sentido nesse contexto, por isso o guard. */
+/* Orquestra a execução: cada CNPJ é uma execução independente (runs[cnpj]),
+   e cada execução abre uma aba para cada certidão selecionada — todas de
+   uma vez, em paralelo, sem uma esperar a outra terminar — manda o content
+   script preencher o CNPJ (quando o site permite automação sem login),
+   aguarda captcha/resultado e salva o PDF gerado (ou confirma envio por
+   e-mail, dependendo do site). Uma certidão falhar não afeta as outras, e
+   uma execução (CNPJ) inteira falhar não afeta outra execução em paralelo
+   para um CNPJ diferente. No Firefox, CNPJUtil vem de lib/cnpj.js
+   carregado antes deste arquivo pelo manifest ("background.scripts"). No
+   Chrome, este arquivo roda sozinho como service worker (MV3 só aceita um
+   "service_worker"), então ele mesmo importa lib/cnpj.js — só faz sentido
+   nesse contexto, por isso o guard. */
 const IS_SERVICE_WORKER = typeof importScripts === 'function';
 if (IS_SERVICE_WORKER) {
   importScripts('lib/browser-shim.js', 'lib/cnpj.js');
@@ -15,6 +18,7 @@ if (IS_SERVICE_WORKER) {
 const NOTIFICATION_ICON = IS_SERVICE_WORKER ? 'icons/chrome/icon-128.png' : 'icons/icon.svg';
 const UNAVAILABLE_RETRY_DELAY_MS = 30 * 1000;
 const UNAVAILABLE_MAX_RETRIES = 3;
+const MAX_STORED_TERMINAL_RUNS = 10;
 
 /* mode "auto": a extensão preenche CNPJ e opera o site sozinha.
    mode "manual": o site exige login (gov.br) — a extensão só abre a aba e
@@ -53,8 +57,15 @@ const SITES = {
 };
 const DEFAULT_SELECTED_SITES = ['rfb', 'caixa'];
 
-let currentRun = null;
-let popupWindowId = null;
+/* Antes só existia UMA execução por vez (currentRun) — abrir o popup e
+   tentar emitir um CNPJ novo enquanto outro ainda rodava era bloqueado
+   ("já existe uma execução em andamento"). Agora runs é um mapa por CNPJ:
+   cada CNPJ é uma execução totalmente independente, cada uma com suas
+   próprias abas/jobs/log, sem uma bloquear ou interferir na outra. Só
+   iniciar DUAS vezes o MESMO CNPJ enquanto a primeira ainda roda é que
+   continua bloqueado (ver startRun). */
+let runs = {};
+let hydrated = false;
 
 /* Serializa as escritas em storage.local.debugLog: sem isso, duas
    mensagens DEBUG_LOG chegando próximas (ex.: dois recordDebug() seguidos
@@ -78,7 +89,10 @@ function appendDebugLogEntry(entry) {
    do ícone da extensão — não dá pra reposicionar nem redimensionar por
    CSS. Por isso o manifest não declara default_popup: o clique no ícone
    cai aqui, e abrimos a mesma popup/popup.html como uma janela normal,
-   centralizada e ocupando metade da tela. */
+   centralizada e ocupando metade da tela. Cada clique (ou cada item do
+   menu de contexto) abre uma janela NOVA e independente — sem reaproveitar
+   uma já aberta — pra permitir acompanhar várias execuções em paralelo,
+   uma por janela. */
 async function getScreenBounds() {
   try {
     if (browser.system && browser.system.display && browser.system.display.getInfo) {
@@ -95,18 +109,6 @@ async function getScreenBounds() {
 }
 
 async function openPopupWindow(prefillCnpj) {
-  if (popupWindowId != null) {
-    const existing = await browser.windows.get(popupWindowId).catch(() => null);
-    if (existing) {
-      await browser.windows.update(popupWindowId, { focused: true });
-      if (prefillCnpj) {
-        browser.runtime.sendMessage({ type: 'PREFILL_CNPJ', cnpj: prefillCnpj }).catch(() => {});
-      }
-      return;
-    }
-    popupWindowId = null;
-  }
-
   const bounds = await getScreenBounds();
   const width = Math.round(bounds.width * 0.5);
   const height = Math.round(bounds.height * 0.5);
@@ -116,49 +118,55 @@ async function openPopupWindow(prefillCnpj) {
   let url = browser.runtime.getURL('popup/popup.html');
   if (prefillCnpj) url += `?cnpj=${encodeURIComponent(prefillCnpj)}`;
 
-  const win = await browser.windows.create({
-    url,
-    type: 'popup',
-    width,
-    height,
-    left,
-    top,
-  });
-  popupWindowId = win.id;
+  await browser.windows.create({ url, type: 'popup', width, height, left, top });
 }
 
 browser.action.onClicked.addListener(() => {
   openPopupWindow();
 });
 
-browser.windows.onRemoved.addListener((id) => {
-  if (id === popupWindowId) popupWindowId = null;
-});
-
-function addLog(message, level = 'info') {
-  if (!currentRun) return;
-  currentRun.log.push({ message, level, at: Date.now() });
-  persistRun();
-  broadcast({ type: 'RUN_UPDATE', run: currentRun });
+function addLog(cnpj, message, level = 'info') {
+  const run = runs[cnpj];
+  if (!run) return;
+  run.log.push({ message, level, at: Date.now() });
+  persistRuns();
+  broadcast({ type: 'RUN_UPDATE', cnpj, run });
 }
 
-function persistRun() {
-  browser.storage.local.set({ currentRun }).catch(() => {});
+/* Mantém só as execuções em andamento + as N mais recentes já terminadas
+   — sem isso, storage.local.runs cresceria sem limite ao longo do tempo
+   (cada CNPJ emitido vira uma entrada nova, e nada removia as antigas). */
+function pruneRuns() {
+  const entries = Object.entries(runs);
+  const running = entries.filter(([, r]) => r.status === 'running');
+  const terminal = entries.filter(([, r]) => r.status !== 'running').sort((a, b) => b[1].startedAt - a[1].startedAt);
+  runs = Object.fromEntries([...running, ...terminal.slice(0, MAX_STORED_TERMINAL_RUNS)]);
+}
+
+function persistRuns() {
+  pruneRuns();
+  browser.storage.local.set({ runs }).catch(() => {});
 }
 
 function broadcast(msg) {
   browser.runtime.sendMessage(msg).catch(() => {});
 }
 
-async function setBadge(text, color) {
-  await browser.action.setBadgeText({ text: text || '' });
-  if (color) await browser.action.setBadgeBackgroundColor({ color });
+async function updateBadge() {
+  const runningCount = Object.values(runs).filter((r) => r.status === 'running').length;
+  await browser.action.setBadgeText({ text: runningCount > 0 ? String(runningCount) : '' });
+  if (runningCount > 0) await browser.action.setBadgeBackgroundColor({ color: '#1f6f4a' });
 }
 
+/* Procura em TODAS as execuções (não só uma) qual job pertence a essa aba
+   — precisa varrer o mapa inteiro agora que existe mais de uma execução
+   simultânea possível. */
 function findJobByTabId(tabId) {
-  if (!currentRun || tabId == null) return null;
-  for (const [siteKey, job] of Object.entries(currentRun.jobs)) {
-    if (job.tabId === tabId) return { siteKey, job };
+  if (tabId == null) return null;
+  for (const [cnpj, run] of Object.entries(runs)) {
+    for (const [siteKey, job] of Object.entries(run.jobs)) {
+      if (job.tabId === tabId) return { cnpj, siteKey, job, run };
+    }
   }
   return null;
 }
@@ -168,8 +176,10 @@ async function startRun(rawCnpj, selectedSites) {
   if (!CNPJUtil.isValid(cnpj)) {
     return { ok: false, error: 'CNPJ inválido.' };
   }
-  if (currentRun && currentRun.status === 'running') {
-    return { ok: false, error: 'Já existe uma execução em andamento.' };
+  /* Só bloqueia se for o MESMO CNPJ já em andamento — CNPJs diferentes
+     rodam em paralelo, sem bloquear um ao outro. */
+  if (runs[cnpj] && runs[cnpj].status === 'running') {
+    return { ok: false, error: 'Já existe uma execução em andamento para este CNPJ.' };
   }
 
   const sites = (Array.isArray(selectedSites) && selectedSites.length ? selectedSites : DEFAULT_SELECTED_SITES).filter(
@@ -179,8 +189,7 @@ async function startRun(rawCnpj, selectedSites) {
     return { ok: false, error: 'Selecione ao menos uma certidão.' };
   }
 
-  currentRun = {
-    runId: crypto.randomUUID(),
+  runs[cnpj] = {
     cnpj,
     selectedSites: sites,
     jobs: Object.fromEntries(sites.map((siteKey) => [siteKey, { tabId: null, status: 'pending', retryCount: 0 }])),
@@ -189,88 +198,91 @@ async function startRun(rawCnpj, selectedSites) {
     startedAt: Date.now(),
   };
   await browser.storage.local.set({ lastCnpj: cnpj, selectedCertidoes: sites });
-  addLog(`Iniciando emissão para CNPJ ${CNPJUtil.format(cnpj)} — ${sites.map((s) => SITES[s].label).join(', ')}.`);
-  await setBadge('...', '#1f6f4a');
+  addLog(cnpj, `Iniciando emissão para CNPJ ${CNPJUtil.format(cnpj)} — ${sites.map((s) => SITES[s].label).join(', ')}.`);
+  await updateBadge();
 
   /* Abre todas as abas em paralelo — nenhuma espera a outra terminar. */
-  await Promise.all(sites.map((siteKey, i) => startJob(siteKey, i === 0)));
+  await Promise.all(sites.map((siteKey, i) => startJob(cnpj, siteKey, i === 0)));
   return { ok: true };
 }
 
-async function startJob(siteKey, makeActive) {
+async function startJob(cnpj, siteKey, makeActive) {
   const site = SITES[siteKey];
-  const job = currentRun.jobs[siteKey];
+  const job = runs[cnpj].jobs[siteKey];
   job.status = 'running';
   job.startedAt = Date.now();
 
   if (site.mode === 'manual') {
-    addLog(`${site.label}: essa certidão exige login — abrindo a aba para você concluir manualmente. Feche a aba quando terminar.`, 'warn');
+    addLog(cnpj, `${site.label}: essa certidão exige login — abrindo a aba para você concluir manualmente. Feche a aba quando terminar.`, 'warn');
     const tab = await browser.tabs.create({ url: site.url, active: makeActive });
     job.tabId = tab.id;
-    persistRun();
+    persistRuns();
     return;
   }
 
   await checkAiSuggestion(siteKey);
-  addLog(`Abrindo ${site.label}...`);
+  addLog(cnpj, `Abrindo ${site.label}...`);
   const tab = await browser.tabs.create({ url: site.url, active: makeActive });
   job.tabId = tab.id;
-  persistRun();
+  persistRuns();
 }
 
 /* outcome opcional distingue, dentro de um sucesso, o caso em que o
    processo terminou mas não havia certidão nenhuma pra extrair (ex.:
    impedimento reportado pela Caixa) — usado só para colorir o popup
    diferente de um sucesso normal, não muda o resultado do run. */
-function succeedJob(siteKey, outcome) {
-  if (!currentRun || !currentRun.jobs[siteKey]) return;
-  currentRun.jobs[siteKey].status = 'success';
-  currentRun.jobs[siteKey].outcome = outcome || 'success';
-  checkRunCompletion();
+function succeedJob(cnpj, siteKey, outcome) {
+  const run = runs[cnpj];
+  if (!run || !run.jobs[siteKey]) return;
+  run.jobs[siteKey].status = 'success';
+  run.jobs[siteKey].outcome = outcome || 'success';
+  checkRunCompletion(cnpj);
 }
 
-function failJob(siteKey, reasonMessage) {
-  if (!currentRun || !currentRun.jobs[siteKey]) return;
-  currentRun.jobs[siteKey].status = 'error';
-  addLog(`${SITES[siteKey].label}: ${reasonMessage}.`, 'error');
-  checkRunCompletion();
+function failJob(cnpj, siteKey, reasonMessage) {
+  const run = runs[cnpj];
+  if (!run || !run.jobs[siteKey]) return;
+  run.jobs[siteKey].status = 'error';
+  addLog(cnpj, `${SITES[siteKey].label}: ${reasonMessage}.`, 'error');
+  checkRunCompletion(cnpj);
 }
 
-async function checkRunCompletion() {
-  if (!currentRun) return;
-  const jobs = Object.values(currentRun.jobs);
+async function checkRunCompletion(cnpj) {
+  const run = runs[cnpj];
+  if (!run || run.status === 'cancelled') return;
+  const jobs = Object.values(run.jobs);
   const allTerminal = jobs.every((j) => j.status === 'success' || j.status === 'error');
   if (!allTerminal) {
-    persistRun();
+    persistRuns();
     return;
   }
 
-  const failedSites = Object.entries(currentRun.jobs)
+  const failedSites = Object.entries(run.jobs)
     .filter(([, j]) => j.status === 'error')
     .map(([siteKey]) => SITES[siteKey].label);
+  const cnpjFormatted = CNPJUtil.format(cnpj);
 
   if (failedSites.length) {
-    currentRun.status = 'error';
-    addLog(`Concluído com falha em: ${failedSites.join(', ')}. As demais certidões foram processadas normalmente.`, 'error');
-    await setBadge('!', '#c0392b');
+    run.status = 'error';
+    addLog(cnpj, `Concluído com falha em: ${failedSites.join(', ')}. As demais certidões foram processadas normalmente.`, 'error');
     browser.notifications.create({
       type: 'basic',
       iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
       title: 'CertFlow — concluído com falhas',
-      message: `Falhou: ${failedSites.join(', ')}. Confira o log no popup.`,
+      message: `CNPJ ${cnpjFormatted} — falhou: ${failedSites.join(', ')}. Confira o log no popup.`,
     }).catch(() => {});
   } else {
-    currentRun.status = 'done';
-    addLog('Todas as certidões foram processadas.', 'success');
-    await setBadge('OK', '#2f9e5c');
+    run.status = 'done';
+    addLog(cnpj, 'Todas as certidões foram processadas.', 'success');
     browser.notifications.create({
       type: 'basic',
       iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
       title: 'CertFlow',
-      message: 'Certidões emitidas com sucesso.',
+      message: `CNPJ ${cnpjFormatted} — certidões emitidas com sucesso.`,
     }).catch(() => {});
   }
-  persistRun();
+  await updateBadge();
+  persistRuns();
 }
 
 const AI_FIELDS = ['cnpjInput', 'submitButton', 'emitButton', 'downloadTrigger'];
@@ -283,7 +295,9 @@ function deriveApiBase(apiUrl) {
    configurado — nunca troca silenciosamente um override que já existe
    (manual ou de uma sugestão anterior da IA), mesmo que a IA tenha um
    palpite novo para ele. Isso evita que a extensão "regrida" sozinha algo
-   que já estava funcionando. */
+   que já estava funcionando. Não é vinculado a um CNPJ específico (as
+   sugestões de seletor são por site, compartilhadas entre execuções), por
+   isso não usa addLog aqui — não há um cnpj único pra associar. */
 async function applyAiSuggestion(siteKey, record) {
   const { aiSuggestions = {} } = await browser.storage.local.get('aiSuggestions');
   aiSuggestions[siteKey] = record;
@@ -308,7 +322,6 @@ async function applyAiSuggestion(siteKey, record) {
     selectorOverrides[siteKey][field] = suggested;
     aiAppliedOverrides[siteKey][field] = true;
     changed = true;
-    addLog(`${SITES[siteKey].label}: IA aplicou automaticamente um seletor para "${field}" (estava sem configuração).`, 'ai');
   }
 
   /* Passos extras vêm do modo de aprendizado (task mining) — coisas que a
@@ -320,7 +333,6 @@ async function applyAiSuggestion(siteKey, record) {
     extraStepOverrides[siteKey][step.role] = { selector: step.selector, action: step.action, value: step.value };
     aiAppliedOverrides[siteKey][step.role] = true;
     changed = true;
-    addLog(`${SITES[siteKey].label}: IA aprendeu e aplicou um passo extra ("${step.role}") observado no modo de aprendizado.`, 'ai');
   }
 
   if (changed) await browser.storage.local.set({ selectorOverrides, aiAppliedOverrides, extraStepOverrides });
@@ -362,32 +374,36 @@ async function requestFreshAnalysis(siteKey) {
   }
 }
 
-/* Restaura currentRun a partir do storage se o service worker (Chrome MV3)
-   foi encerrado por inatividade entre uma mensagem e outra — sem isso, uma
-   execução em andamento "sumiria" silenciosamente no meio do fluxo. */
-async function hydrateRun() {
-  if (currentRun) return;
-  const { currentRun: stored } = await browser.storage.local.get('currentRun');
-  if (stored && stored.status === 'running') {
-    currentRun = stored;
+/* Restaura runs a partir do storage se o service worker (Chrome MV3) foi
+   encerrado por inatividade entre uma mensagem e outra — sem isso, uma
+   execução em andamento "sumiria" silenciosamente no meio do fluxo. Só
+   precisa rodar uma vez por "acordar" do service worker. */
+async function hydrateRuns() {
+  if (hydrated) return;
+  hydrated = true;
+  const { runs: stored } = await browser.storage.local.get('runs');
+  if (stored) {
+    for (const [cnpj, run] of Object.entries(stored)) {
+      if (!runs[cnpj]) runs[cnpj] = run;
+    }
   }
 }
 
-async function attemptSaveAsPdf(tabId, siteKey) {
+async function attemptSaveAsPdf(tabId, siteKey, cnpj) {
   if (!browser.tabs.saveAsPDF) {
-    addLog('Não foi possível localizar um link de download; salve manualmente com Ctrl+P na aba aberta.', 'warn');
+    addLog(cnpj, 'Não foi possível localizar um link de download; salve manualmente com Ctrl+P na aba aberta.', 'warn');
     return;
   }
-  addLog('Nenhum link direto encontrado — abrindo diálogo "Salvar como PDF" do Firefox (uma confirmação manual).', 'warn');
+  addLog(cnpj, 'Nenhum link direto encontrado — abrindo diálogo "Salvar como PDF" do Firefox (uma confirmação manual).', 'warn');
   try {
     const result = await browser.tabs.saveAsPDF({});
     if (result === 'saved') {
-      addLog(`${SITES[siteKey].label}: PDF salvo pelo diálogo do Firefox.`, 'success');
+      addLog(cnpj, `${SITES[siteKey].label}: PDF salvo pelo diálogo do Firefox.`, 'success');
     } else {
-      addLog(`${SITES[siteKey].label}: salvamento em PDF cancelado pelo usuário.`, 'warn');
+      addLog(cnpj, `${SITES[siteKey].label}: salvamento em PDF cancelado pelo usuário.`, 'warn');
     }
   } catch (err) {
-    addLog(`Falha ao chamar o diálogo de salvar PDF: ${err.message || err}`, 'error');
+    addLog(cnpj, `Falha ao chamar o diálogo de salvar PDF: ${err.message || err}`, 'error');
   }
 }
 
@@ -422,7 +438,7 @@ async function handleDownloadBlob(msg) {
     const { history = [] } = await browser.storage.local.get('history');
     history.unshift({ cnpj, siteKey, filename, downloadId, at: Date.now() });
     await browser.storage.local.set({ history: history.slice(0, 100) });
-    addLog(`${SITES[siteKey].label}: arquivo salvo em "${filename}".`, 'success');
+    addLog(cnpj, `${SITES[siteKey].label}: arquivo salvo em "${filename}".`, 'success');
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
@@ -476,6 +492,22 @@ async function waitForNativeDownload(siteKey, sinceMs, { timeout = 5000, interva
   return false;
 }
 
+/* Acha, entre TODAS as execuções em andamento, uma cujo site bata com o
+   hostname do download nativo — usado por onDeterminingFilename abaixo,
+   que não tem um jeito direto de saber a qual execução um download
+   pertence (a API não expõe tabId do download). */
+function findRunningJobBySiteHostname(referrerAndUrl) {
+  for (const [cnpj, run] of Object.entries(runs)) {
+    if (run.status !== 'running') continue;
+    for (const siteKey of Object.keys(run.jobs)) {
+      if (run.jobs[siteKey].status !== 'running') continue;
+      const hostname = siteHostname(siteKey);
+      if (hostname && referrerAndUrl.includes(hostname)) return { cnpj, siteKey };
+    }
+  }
+  return null;
+}
+
 /* A pasta configurada em Configurações (downloadFolder) só era aplicada
    pra downloads que a PRÓPRIA extensão iniciava (handleDownloadBlob) —
    downloads nativos disparados pelo site (ex.: "Segunda Via", "Emitir
@@ -484,8 +516,9 @@ async function waitForNativeDownload(siteKey, sinceMs, { timeout = 5000, interva
    configuração por completo (reportado por um usuário). onDeterminingFilename
    intercepta QUALQUER download (nativo ou não) antes de ele ser salvo,
    permitindo sugerir um nome/caminho novo — usado aqui pra redirecionar
-   também os downloads nativos pra mesma pasta/convenção de nome. */
-/* Registro protegido por try/catch: se downloads.onDeterminingFilename
+   também os downloads nativos pra mesma pasta/convenção de nome.
+
+   Registro protegido por try/catch: se downloads.onDeterminingFilename
    não existir ou não puder ser usado nesse navegador/versão, um erro
    síncrono aqui pararia a execução do resto do arquivo — inclusive
    registros mais abaixo, como o clique no menu de contexto que abre o
@@ -500,18 +533,11 @@ try {
        dado que o id pode não estar no Set ainda por uma corrida de timing). */
     const isOwnBlob = /^blob:(moz|chrome)-extension:\/\//.test(downloadItem.url || '');
     if (selfInitiatedDownloadIds.has(downloadItem.id) || isOwnBlob) return false;
-    if (!currentRun) return false;
 
-    const matchEntry = Object.entries(currentRun.jobs).find(([siteKey, job]) => {
-      if (job.status !== 'running') return false;
-      const hostname = siteHostname(siteKey);
-      if (!hostname) return false;
-      const ref = `${downloadItem.referrer || ''} ${downloadItem.url || ''}`;
-      return ref.includes(hostname);
-    });
-    if (!matchEntry) return false;
-    const [siteKey] = matchEntry;
-    const cnpj = currentRun.cnpj;
+    const ref = `${downloadItem.referrer || ''} ${downloadItem.url || ''}`;
+    const match = findRunningJobBySiteHostname(ref);
+    if (!match) return false;
+    const { cnpj, siteKey } = match;
 
     (async () => {
       const originalName = downloadItem.filename || 'certidao.pdf';
@@ -542,7 +568,7 @@ async function sendLogToApi(events, source) {
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ source: source || 'certflow-extension', runId: currentRun?.runId || null, events }),
+      body: JSON.stringify({ source: source || 'certflow-extension', events }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await browser.storage.local.set({ apiStatus: { ok: true, at: Date.now(), message: 'Envio ok.' } });
@@ -554,27 +580,26 @@ async function sendLogToApi(events, source) {
 }
 
 async function handleCsStatus(msg, sender) {
-  if (!currentRun) return;
   const found = findJobByTabId(sender.tab?.id);
   if (!found || found.siteKey !== msg.siteKey) return;
-  const { job } = found;
+  const { cnpj, job, run } = found;
   const site = SITES[msg.siteKey];
 
   switch (msg.status) {
     case 'submitting':
-      addLog(`${site.label}: consulta enviada.`);
+      addLog(cnpj, `${site.label}: consulta enviada.`);
       break;
     case 'captcha':
-      addLog(`${site.label}: captcha detectado — resolva-o na aba aberta para continuar.`, 'warn');
+      addLog(cnpj, `${site.label}: captcha detectado — resolva-o na aba aberta para continuar.`, 'warn');
       browser.notifications.create({
         type: 'basic',
         iconUrl: browser.runtime.getURL(NOTIFICATION_ICON),
         title: 'CertFlow — ação necessária',
-        message: `Resolva o captcha na aba "${site.label}" para continuar.`,
+        message: `CNPJ ${CNPJUtil.format(cnpj)} — resolva o captcha na aba "${site.label}" para continuar.`,
       }).catch(() => {});
       break;
     case 'result_ready':
-      addLog(`${site.label}: resultado obtido${msg.detail ? ' — ' + msg.detail : ''}.`, msg.detail?.includes('Positiva') ? 'warn' : 'info');
+      addLog(cnpj, `${site.label}: resultado obtido${msg.detail ? ' — ' + msg.detail : ''}.`, msg.detail?.includes('Positiva') ? 'warn' : 'info');
       break;
     case 'ai_verdict': {
       const v = msg.detail || {};
@@ -586,35 +611,36 @@ async function handleCsStatus(msg, sender) {
       };
       const label = AI_STATUS_LABEL[v.status] || v.status || 'Indeterminado';
       const level = v.status === 'regular' ? 'success' : v.status === 'positiva_com_pendencia' ? 'warn' : 'ai';
-      addLog(`${site.label}: IA (Gemini Nano) — ${label}${v.resumo ? ': ' + v.resumo : ''}`, level);
-      currentRun.aiVerdicts = currentRun.aiVerdicts || {};
-      currentRun.aiVerdicts[msg.siteKey] = v;
-      persistRun();
+      addLog(cnpj, `${site.label}: IA (Gemini Nano) — ${label}${v.resumo ? ': ' + v.resumo : ''}`, level);
+      run.aiVerdicts = run.aiVerdicts || {};
+      run.aiVerdicts[msg.siteKey] = v;
+      persistRuns();
       break;
     }
     case 'emitting':
-      addLog(`${site.label}: emitindo certidão...`);
+      addLog(cnpj, `${site.label}: emitindo certidão...`);
       break;
     case 'temporarily_unavailable': {
       job.retryCount = (job.retryCount || 0) + 1;
       if (job.retryCount > UNAVAILABLE_MAX_RETRIES) {
-        failJob(msg.siteKey, `${msg.detail || 'serviço indisponível'} — desistindo após ${UNAVAILABLE_MAX_RETRIES} tentativas`);
+        failJob(cnpj, msg.siteKey, `${msg.detail || 'serviço indisponível'} — desistindo após ${UNAVAILABLE_MAX_RETRIES} tentativas`);
         break;
       }
       addLog(
+        cnpj,
         `${site.label}: ${msg.detail || 'serviço indisponível'} — nova tentativa (${job.retryCount}/${UNAVAILABLE_MAX_RETRIES}) em ${Math.round(UNAVAILABLE_RETRY_DELAY_MS / 1000)}s.`,
         'warn'
       );
-      persistRun();
-      await browser.alarms.create(`certflow-retry-${currentRun.runId}-${msg.siteKey}`, { when: Date.now() + UNAVAILABLE_RETRY_DELAY_MS });
+      persistRuns();
+      await browser.alarms.create(`certflow-retry-${cnpj}-${msg.siteKey}`, { when: Date.now() + UNAVAILABLE_RETRY_DELAY_MS });
       break;
     }
     case 'emailed':
-      addLog(`${site.label}: certidão emitida e enviada por e-mail${msg.detail ? ' — ' + msg.detail : ''}. Confira a caixa de entrada (e o spam).`, 'success');
-      succeedJob(msg.siteKey);
+      addLog(cnpj, `${site.label}: certidão emitida e enviada por e-mail${msg.detail ? ' — ' + msg.detail : ''}. Confira a caixa de entrada (e o spam).`, 'success');
+      succeedJob(cnpj, msg.siteKey);
       break;
     case 'downloaded':
-      succeedJob(msg.siteKey);
+      succeedJob(cnpj, msg.siteKey);
       break;
     case 'manual_save_needed': {
       /* Antes de cair no fallback de imprimir a TELA, confere se o próprio
@@ -627,28 +653,28 @@ async function handleCsStatus(msg, sender) {
          começar (confirmado por um usuário). Se já baixou (ou baixa
          dentro da espera), o arquivo real já está salvo; não faz sentido
          salvar a tela também. */
-      const nativeDownload = await waitForNativeDownload(msg.siteKey, job.startedAt || currentRun.startedAt);
+      const nativeDownload = await waitForNativeDownload(msg.siteKey, job.startedAt || run.startedAt);
       if (nativeDownload) {
-        addLog(`${site.label}: o próprio site já iniciou o download do PDF — não é preciso salvar a tela.`, 'success');
+        addLog(cnpj, `${site.label}: o próprio site já iniciou o download do PDF — não é preciso salvar a tela.`, 'success');
       } else {
-        await attemptSaveAsPdf(job.tabId, msg.siteKey);
+        await attemptSaveAsPdf(job.tabId, msg.siteKey, cnpj);
       }
-      succeedJob(msg.siteKey);
+      succeedJob(cnpj, msg.siteKey);
       break;
     }
     case 'concluded_without_certificate':
-      addLog(`${site.label}: processo concluído, mas não há certidão para extrair${msg.detail ? ' — ' + msg.detail : ''}. Salvando a tela.`, 'warn');
-      await attemptSaveAsPdf(job.tabId, msg.siteKey);
-      succeedJob(msg.siteKey, 'no_certificate');
+      addLog(cnpj, `${site.label}: processo concluído, mas não há certidão para extrair${msg.detail ? ' — ' + msg.detail : ''}. Salvando a tela.`, 'warn');
+      await attemptSaveAsPdf(job.tabId, msg.siteKey, cnpj);
+      succeedJob(cnpj, msg.siteKey, 'no_certificate');
       break;
     case 'error':
-      failJob(msg.siteKey, msg.detail || 'erro desconhecido');
+      failJob(cnpj, msg.siteKey, msg.detail || 'erro desconhecido');
       break;
     case 'restart_for_emit_new':
       /* A certidão existente não atendia à validade mínima configurada —
          precisa voltar pra URL inicial e refazer o fluxo indo direto para
          "Emitir Nova Certidão" (o flag sobrevive à navegação porque
-         currentRun.jobs vive no background, não na aba).
+         runs[cnpj].jobs vive no background, não na aba).
 
          Só trocar a URL não bastava: a app é uma SPA com rota via hash
          (#/home/cnpj/...), e tabs.update para uma URL que só difere no
@@ -662,7 +688,7 @@ async function handleCsStatus(msg, sender) {
          navegações genuínas em vez de uma troca de hash que a SPA possa
          ignorar ou reverter. */
       job.forceEmitNew = true;
-      addLog(`${site.label}: certidão existente não atende à validade mínima configurada — emitindo uma nova.`, 'warn');
+      addLog(cnpj, `${site.label}: certidão existente não atende à validade mínima configurada — emitindo uma nova.`, 'warn');
       await browser.tabs.update(job.tabId, { url: 'about:blank' }).catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 300));
       await browser.tabs.update(job.tabId, { url: site.url }).catch(() => {});
@@ -674,7 +700,7 @@ async function handleCsStatus(msg, sender) {
 
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    await hydrateRun();
+    await hydrateRuns();
     switch (msg.type) {
       case 'START_RUN': {
         const result = await startRun(msg.cnpj, msg.selectedSites);
@@ -687,8 +713,9 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           'lastCnpj',
           'selectedCertidoes',
         ]);
+        const cnpj = msg.cnpj ? CNPJUtil.onlyDigits(msg.cnpj) : null;
         sendResponse({
-          run: currentRun,
+          run: cnpj ? runs[cnpj] || null : null,
           history,
           lastCnpj,
           availableSites: Object.fromEntries(Object.entries(SITES).map(([k, v]) => [k, { label: v.label, mode: v.mode }])),
@@ -697,19 +724,21 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case 'CANCEL_RUN': {
-        if (currentRun) {
-          currentRun.status = 'cancelled';
-          addLog('Execução cancelada pelo usuário.', 'warn');
-          await setBadge('', null);
+        const cnpj = msg.cnpj ? CNPJUtil.onlyDigits(msg.cnpj) : null;
+        const run = cnpj ? runs[cnpj] : null;
+        if (run && run.status === 'running') {
+          run.status = 'cancelled';
+          addLog(cnpj, 'Execução cancelada pelo usuário.', 'warn');
+          await updateBadge();
         }
         sendResponse({ ok: true });
         break;
       }
       case 'CS_READY': {
-        const found = currentRun && currentRun.status === 'running' ? findJobByTabId(sender.tab?.id) : null;
-        if (found && found.siteKey === msg.siteKey && found.job.status === 'running') {
+        const found = findJobByTabId(sender.tab?.id);
+        if (found && found.siteKey === msg.siteKey && found.job.status === 'running' && found.run.status === 'running') {
           browser.tabs
-            .sendMessage(sender.tab.id, { type: 'RUN_JOB', siteKey: msg.siteKey, cnpj: currentRun.cnpj, forceEmitNew: !!found.job.forceEmitNew })
+            .sendMessage(sender.tab.id, { type: 'RUN_JOB', siteKey: msg.siteKey, cnpj: found.cnpj, forceEmitNew: !!found.job.forceEmitNew })
             .catch(() => {});
         }
         sendResponse({ ok: true });
@@ -780,9 +809,10 @@ browser.contextMenus.onClicked?.addListener(async (info) => {
     }).catch(() => {});
     return;
   }
-  /* Não dispara startRun() direto — abre o popup (com o CNPJ já
+  /* Não dispara startRun() direto — abre um popup NOVO (com o CNPJ já
      preenchido) pra o usuário confirmar/escolher quais certidões emitir
-     antes de qualquer aba ser aberta, do mesmo jeito que clicar no ícone. */
+     antes de qualquer aba ser aberta, do mesmo jeito que clicar no ícone.
+     Cada seleção abre sua própria janela independente. */
   await openPopupWindow(digits);
 });
 
@@ -795,15 +825,19 @@ browser.runtime.onInstalled.addListener(() => {
 });
 
 browser.alarms.onAlarm.addListener(async (alarm) => {
-  if (!alarm.name.startsWith('certflow-retry-')) return;
-  await hydrateRun();
-  if (!currentRun || currentRun.status !== 'running') return;
-  for (const [siteKey, job] of Object.entries(currentRun.jobs)) {
-    if (alarm.name === `certflow-retry-${currentRun.runId}-${siteKey}` && job.status === 'running') {
-      addLog(`${SITES[siteKey].label}: tentando novamente...`);
-      await browser.tabs.reload(job.tabId).catch(() => {});
-    }
-  }
+  const prefix = 'certflow-retry-';
+  if (!alarm.name.startsWith(prefix)) return;
+  await hydrateRuns();
+  /* CNPJ é sempre 14 dígitos fixos — dá pra separar do siteKey de forma
+     confiável sem ambiguidade (certflow-retry-<14 dígitos>-<siteKey>). */
+  const rest = alarm.name.slice(prefix.length);
+  const cnpj = rest.slice(0, 14);
+  const siteKey = rest.slice(15);
+  const run = runs[cnpj];
+  const job = run?.jobs[siteKey];
+  if (!run || run.status !== 'running' || !job || job.status !== 'running') return;
+  addLog(cnpj, `${SITES[siteKey].label}: tentando novamente...`);
+  await browser.tabs.reload(job.tabId).catch(() => {});
 });
 
 /* Sem isso, fechar a aba de uma certidão manual (Simples Nacional) nunca
@@ -811,17 +845,16 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
    automática no meio do processo deixaria aquele job preso em "running"
    pra sempre, travando a conclusão do run. */
 browser.tabs.onRemoved.addListener((tabId) => {
-  if (!currentRun || currentRun.status !== 'running') return;
   const found = findJobByTabId(tabId);
-  if (!found || found.job.status !== 'running') return;
-  const { siteKey, job } = found;
+  if (!found || found.job.status !== 'running' || found.run.status !== 'running') return;
+  const { cnpj, siteKey, job } = found;
 
   if (SITES[siteKey].mode === 'manual') {
     job.status = 'success';
-    addLog(`${SITES[siteKey].label}: aba fechada — considerando concluído (confira se a certidão foi realmente emitida).`, 'success');
+    addLog(cnpj, `${SITES[siteKey].label}: aba fechada — considerando concluído (confira se a certidão foi realmente emitida).`, 'success');
   } else {
     job.status = 'error';
-    addLog(`${SITES[siteKey].label}: aba foi fechada antes de terminar.`, 'error');
+    addLog(cnpj, `${SITES[siteKey].label}: aba foi fechada antes de terminar.`, 'error');
   }
-  checkRunCompletion();
+  checkRunCompletion(cnpj);
 });

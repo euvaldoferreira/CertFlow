@@ -12,6 +12,13 @@
   const reuseMinDays = document.getElementById('reuse-existing-certidao-min-days');
 
   let availableSites = {};
+  /* Cada janela de popup acompanha o CNPJ que está no campo — não existe
+     mais uma única execução global (currentRun): agora runs no background
+     é um mapa por CNPJ, e cada janela independente precisa dizer qual
+     delas quer ver/cancelar. Troca junto com o campo à medida que o
+     usuário digita/cola um CNPJ válido, permitindo abrir várias janelas e
+     cada uma acompanhar sua própria execução sem interferir nas outras. */
+  let trackedCnpj = '';
 
   function maskAsYouType(digits) {
     let out = digits;
@@ -26,6 +33,10 @@
     const digits = CNPJUtil.onlyDigits(cnpjInput.value).slice(0, 14);
     cnpjInput.value = maskAsYouType(digits);
     cnpjError.hidden = true;
+    if (digits.length === 14 && digits !== trackedCnpj) {
+      trackedCnpj = digits;
+      refresh();
+    }
   });
 
   function getSelectedSites() {
@@ -116,11 +127,22 @@
   }
 
   async function refresh() {
-    const { run, lastCnpj, availableSites: sites, selectedCertidoes } = await browser.runtime.sendMessage({ type: 'GET_RUN_STATE' });
+    const { run, lastCnpj, availableSites: sites, selectedCertidoes } = await browser.runtime.sendMessage({
+      type: 'GET_RUN_STATE',
+      cnpj: trackedCnpj,
+    });
     availableSites = sites || {};
-    if (!cnpjInput.value && lastCnpj) cnpjInput.value = maskAsYouType(lastCnpj);
     if (!siteCheckboxes.childElementCount) {
       renderSiteCheckboxes(availableSites, (run && run.selectedSites) || selectedCertidoes || []);
+    }
+    /* Só preenche o campo (e busca de novo) a partir do último CNPJ usado
+       quando a janela abriu sem nenhum CNPJ ainda — não sobrescreve o que
+       o usuário já está digitando. */
+    if (!cnpjInput.value && !trackedCnpj && lastCnpj) {
+      trackedCnpj = lastCnpj;
+      cnpjInput.value = maskAsYouType(lastCnpj);
+      refresh();
+      return;
     }
     renderRunning(run);
   }
@@ -166,11 +188,12 @@
       startBtn.textContent = 'Emitir certidões';
       return;
     }
+    trackedCnpj = digits;
     refresh();
   });
 
   cancelBtn.addEventListener('click', async () => {
-    await browser.runtime.sendMessage({ type: 'CANCEL_RUN' });
+    await browser.runtime.sendMessage({ type: 'CANCEL_RUN', cnpj: trackedCnpj });
     refresh();
   });
 
@@ -180,17 +203,23 @@
   });
 
   browser.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'RUN_UPDATE') renderRunning(msg.run);
+    /* Com várias janelas abertas (uma por CNPJ), cada uma só deve reagir a
+       atualizações da execução que ELA está acompanhando — senão o log e
+       os passos de uma janela passariam a exibir o progresso de outro
+       CNPJ que só por acaso terminou de atualizar por último. */
+    if (msg.type === 'RUN_UPDATE' && msg.cnpj === trackedCnpj) renderRunning(msg.run);
     if (msg.type === 'PREFILL_CNPJ' && msg.cnpj) {
-      cnpjInput.value = maskAsYouType(CNPJUtil.onlyDigits(msg.cnpj).slice(0, 14));
+      trackedCnpj = CNPJUtil.onlyDigits(msg.cnpj).slice(0, 14);
+      cnpjInput.value = maskAsYouType(trackedCnpj);
       cnpjError.hidden = true;
+      refresh();
     }
   });
 
   const paramCnpj = new URLSearchParams(window.location.search).get('cnpj');
   if (paramCnpj) {
-    const digits = CNPJUtil.onlyDigits(paramCnpj).slice(0, 14);
-    cnpjInput.value = maskAsYouType(digits);
+    trackedCnpj = CNPJUtil.onlyDigits(paramCnpj).slice(0, 14);
+    cnpjInput.value = maskAsYouType(trackedCnpj);
   }
 
   refresh();

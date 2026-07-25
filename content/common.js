@@ -377,6 +377,28 @@
     return TEMP_UNAVAILABLE_HINTS.test(bodyText);
   }
 
+  /* O CNDT tem um texto de ajuda/instrução na própria tela inicial (antes
+     de resolver o captcha) que já lista, como exemplo, as mensagens
+     possíveis — incluindo literalmente "Certidão EMITIDA com sucesso" e
+     "Certidão EMITIDA e ENVIADA por e-mail com sucesso" — o que batia com
+     RESULT_TEXT_HINTS/EMAIL_SENT_HINTS antes mesmo do captcha ser
+     resolvido (confirmado por um usuário: a extensão clicava em "Emitir
+     Certidão" repetidas vezes e reportava sucesso por e-mail sem o
+     captcha nem ter carregado). Para este site, só aceita detectResult()
+     como um resultado de verdade quando o formulário (campo de CNPJ) já
+     tiver saído da página — mesmo princípio já usado no início de
+     runFlow() para não confundir a descrição do serviço com um resultado
+     real. Não se aplica aos outros sites porque, neles, o campo de CNPJ
+     pode legitimamente continuar na página mesmo depois de um resultado
+     real aparecer (ex.: Caixa). */
+  function isResultConfirmed(siteKey, selectorOverrides) {
+    if (!detectResult()) return false;
+    if (siteKey === 'cndt') {
+      return !resolveElement('cnpjInput', siteKey, selectorOverrides, findCnpjInputHeuristic);
+    }
+    return true;
+  }
+
   function detectEmailSent() {
     const bodyText = detectionText();
     return EMAIL_SENT_HINTS.test(bodyText);
@@ -1321,6 +1343,12 @@
 
       let texto = null;
       let source = null;
+      /* solveCaptchaImageWithNano só existe quando content/ai.js foi
+         carregado, e esse arquivo só é listado em manifest.chrome.json —
+         no Firefox essa função nunca é definida, então este typeof já
+         garante que o Nano nunca é sequer tentado ali (sem custo nenhum
+         quando indisponível: não é uma chamada que falha, é uma função
+         que não existe). */
       if (typeof solveCaptchaImageWithNano === 'function') {
         try {
           const blob = await imageElementToBlob(img);
@@ -1436,16 +1464,15 @@
       /* Se a resolução automática por IA estiver ligada (Configurações) e
          conseguir ler o captcha com confiança, o campo de resposta já sai
          preenchido daqui e o fluxo cai direto no clique automático abaixo,
-         igual a um site sem captcha nenhum. Se a IA estava LIGADA mas não
-         conseguiu resolver (Nano indisponível, API própria fora do ar,
-         Gemini sem créditos/cota, imagem ilegível), reinicia a consulta
-         em vez de esperar o usuário — pedido explícito: se a resolução
-         automática falhar, tentar de novo do zero, não cair pro manual
-         silenciosamente. Reaproveita o mesmo mecanismo de retry/reload já
-         usado para "serviço temporariamente indisponível" (até
-         UNAVAILABLE_MAX_RETRIES tentativas, depois falha o job). Só quando
-         a IA está DESLIGADA é que o fluxo manual de sempre entra em jogo —
-         nesse caso nada muda pro usuário. */
+         igual a um site sem captcha nenhum — sucesso é o captcha ter sido
+         resolvido (por IA ou, no fluxo abaixo, manualmente pelo usuário),
+         não uma questão de qual das duas formas resolveu. Quando a IA não
+         consegue ler (desligada, Nano indisponível, API própria fora do
+         ar, Gemini sem créditos/cota, imagem ilegível), isso NÃO é tratado
+         como falha da execução — cai silenciosamente no mesmo fluxo
+         manual de sempre, deixando a cargo do usuário resolver e clicar
+         em "Emitir Certidão", exatamente como se a opção estivesse
+         desligada. */
       const captchaAutoSolveResult = captchaAlreadyPresent
         ? await tryAutoSolveCaptcha(siteKey, selectorOverrides)
         : { enabled: false, solved: false };
@@ -1458,17 +1485,12 @@
         }
       }
 
-      if (captchaAlreadyPresent && captchaAutoSolveResult.enabled && !captchaAutoSolveResult.solved) {
-        reportUnavailable(siteKey, 'Não foi possível resolver o captcha automaticamente com IA — reiniciando a consulta.');
-        return;
-      }
-
       if (captchaAlreadyPresent && !captchaAutoSolveResult.solved) {
         recordDebug(siteKey, 'captcha_before_submit', 'Captcha detectado antes do envio — aguardando o usuário resolver e clicar em emitir/consultar manualmente.');
         sendStatus(siteKey, 'captcha');
         const outcome = await waitFor(() => {
           if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
-          if (detectResult()) return { type: 'result' };
+          if (isResultConfirmed(siteKey, selectorOverrides)) return { type: 'result' };
           return null;
         }, { timeout: 300000, interval: 400 });
         if (!outcome) {
@@ -1514,7 +1536,7 @@
           if (Date.now() - pollStartedAt < MIN_OUTCOME_DELAY_MS) return null;
           if (detectCaptcha().present) return { type: 'captcha' };
           if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
-          if (detectResult()) return { type: 'result' };
+          if (isResultConfirmed(siteKey, selectorOverrides)) return { type: 'result' };
           return null;
         }, { timeout: timeoutMs, interval: 400 });
       }

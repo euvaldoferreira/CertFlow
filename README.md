@@ -193,10 +193,12 @@ fazia a extensão nunca "ver" o captcha e clicar em "Emitir Certidão" sozinha, 
 CNDT → "Resolver captcha automaticamente", é possível ligar uma tentativa de leitura automática da
 imagem do captcha antes de cair no fluxo manual acima. Duas fontes, nessa ordem:
 
-1. **Gemini Nano on-device** (Chrome, via `content/ai.js`, usando a Prompt API multimodal com entrada de
-   imagem) — a imagem nunca sai da máquina do usuário. Só funciona onde o Chrome já baixou o modelo e
-   suporta entrada de imagem; em qualquer outra situação (Firefox, Chrome sem o modelo) essa fonte
-   simplesmente não existe e a extensão já cai na próxima.
+1. **Gemini Nano on-device** (só no Chrome, via `content/ai.js` — esse arquivo nem é carregado pelo
+   manifest do Firefox, então no Firefox essa fonte nunca é sequer tentada, não é uma tentativa que
+   falha) usando a Prompt API multimodal com entrada de imagem — a imagem nunca sai da máquina do
+   usuário. Só funciona onde o Chrome já baixou o modelo e suporta entrada de imagem; em qualquer outra
+   situação (Firefox, Chrome sem o modelo) essa fonte simplesmente não existe e a extensão já cai na
+   próxima.
 2. **Gemini na nuvem**, através da `certflow-api` própria do usuário (mesma URL/chave configuradas para
    sugestão de seletores) — endpoint `POST /api/captcha/solve`, que envia a imagem pro Gemini com um
    prompt pedindo a transcrição exata dos caracteres.
@@ -204,14 +206,16 @@ imagem do captcha antes de cair no fluxo manual acima. Duas fontes, nessa ordem:
 Enquanto espera a resposta da IA, a página mostra um banner com um spinner ("CertFlow: resolvendo
 captcha com IA..."), já que a chamada pode levar alguns segundos. Se **nenhuma** das duas fontes
 conseguir ler o captcha com confiança — imagem ilegível, Nano indisponível, API própria fora do ar, ou o
-Gemini recusando por falta de créditos/cota — a extensão **reinicia a consulta** (recarrega a aba e tenta
-de novo, reaproveitando o mesmo mecanismo de retry de "serviço temporariamente indisponível", até 3
-vezes) em vez de simplesmente esperar o usuário; só quando essa opção está **desligada** é que o fluxo
-manual de sempre entra em jogo. Cada tentativa de leitura (acertou ou não, verificado observando se um
-resultado real apareceu depois do envio) é registrada via `POST /api/captcha/feedback` na `certflow-api`
-— isso é só um log para revisão humana futura (nem o Gemini via API nem o Nano local têm algum mecanismo
-de aprendizado a partir de uma chamada individual; não existe ajuste fino em tempo real), no mesmo
-espírito do log de diagnóstico que já alimenta as sugestões de seletor.
+Gemini recusando por falta de créditos/cota — isso **não é tratado como falha**: a extensão cai
+silenciosamente no mesmo fluxo manual de sempre (como se a opção estivesse desligada), deixando a
+resolução a cargo do usuário. Sucesso é o captcha ter sido resolvido — por IA ou manualmente pelo
+usuário — não uma questão de qual das duas formas resolveu; só conta como falha de fato quando nem a IA
+nem o usuário conseguem (mesmas condições de timeout do fluxo manual). Cada tentativa da IA que realmente
+produziu uma resposta (acertou ou não, verificado observando se um resultado real apareceu depois do
+envio) é registrada via `POST /api/captcha/feedback` na `certflow-api` — isso é só um log para revisão
+humana futura (nem o Gemini via API nem o Nano local têm algum mecanismo de aprendizado a partir de uma
+chamada individual; não existe ajuste fino em tempo real), no mesmo espírito do log de diagnóstico que já
+alimenta as sugestões de seletor.
 
 Automatizar essa etapa significa contornar uma barreira que o TST provavelmente usa contra robôs —
 considere se isso está dentro do uso aceitável do serviço antes de ligar a opção. Também nunca escolhe

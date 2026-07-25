@@ -144,18 +144,18 @@
     <p class="intro">
       O CNDT exige resolver um captcha de imagem antes de emitir a certidão — por padrão, a extensão
       sempre para e espera você resolver e clicar em "Emitir Certidão" manualmente. Ligando esta opção,
-      ela tenta ler a imagem primeiro com o Gemini Nano on-device (Chrome, se o modelo estiver
-      disponível — a imagem nunca sai da máquina) e, se não conseguir, com o Gemini na nuvem através da
-      <code>certflow-api</code> (exige URL e chave configuradas na seção "Envio para API própria"
-      abaixo). Se a leitura falhar (imagem ilegível, IA fora do ar, Gemini sem créditos/cota), a
-      extensão reinicia a consulta automaticamente em vez de esperar você — só cai no modo manual de
-      espera se esta opção estiver desligada.
+      ela tenta ler a imagem primeiro com o Gemini Nano on-device (só no Chrome, se o modelo estiver
+      disponível — a imagem nunca sai da máquina; no Firefox essa etapa nem é tentada) e, se não
+      conseguir, com o Gemini na nuvem através da <code>certflow-api</code> (exige URL e chave
+      configuradas na seção "Envio para API própria" abaixo). Se a leitura falhar por qualquer motivo
+      (imagem ilegível, Nano indisponível, API própria fora do ar, Gemini sem créditos/cota), isso
+      <strong>não</strong> é tratado como erro — a extensão simplesmente cai no mesmo modo manual de
+      espera de sempre, deixando a cargo de você resolver e clicar em "Emitir Certidão".
     </p>
     <p class="tab-hint">
       Isso automatiza uma etapa que o TST provavelmente usa como barreira contra robôs — considere se
-      isso está dentro do uso aceitável do serviço antes de ligar. A leitura também não é garantida: um
-      captcha pode ser interpretado errado, o que a extensão trata reiniciando a consulta (contando como
-      mais uma tentativa) em vez de arriscar enviar uma resposta errada sem perceber.
+      isso está dentro do uso aceitável do serviço antes de ligar. Sucesso é o captcha ter sido resolvido
+      — por IA ou por você manualmente — não uma questão de qual das duas formas resolveu.
     </p>
     <div class="field-row checkbox-row">
       <label for="cndt-captcha-ai-enabled">Tentar resolver o captcha do CNDT com IA</label>

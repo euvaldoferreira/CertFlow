@@ -126,12 +126,44 @@
       <button class="pick-btn" type="button">Selecionar na página</button>
       <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
     </div>
+    <div class="field-row" data-kind="captchaImage">
+      <label>Imagem do captcha (só usado se a resolução automática abaixo estiver ligada)</label>
+      <input type="text" class="selector-value" readonly placeholder="detecção automática" />
+      <button class="pick-btn" type="button">Selecionar na página</button>
+      <button class="clear-btn" type="button" title="Voltar para detecção automática">Limpar</button>
+    </div>
     <p class="tab-hint" data-site-hint="cndt">Nenhuma aba do site aberta no momento.</p>
     <p class="tab-hint">
       O CNDT normalmente gera o PDF na hora após o captcha, mas o site também pode enviar por e-mail em
       vez de mostrar um link — nesse caso a extensão já reconhece o aviso de envio como sucesso, sem
-      precisar de configuração extra aqui.
+      precisar de configuração extra aqui. Se houver escolha entre visualizar e receber por e-mail, a
+      extensão nunca seleciona a opção de e-mail sozinha.
     </p>
+
+    <h3>Resolver captcha automaticamente (experimental)</h3>
+    <p class="intro">
+      O CNDT exige resolver um captcha de imagem antes de emitir a certidão — por padrão, a extensão
+      sempre para e espera você resolver e clicar em "Emitir Certidão" manualmente. Ligando esta opção,
+      ela tenta ler a imagem primeiro com o Gemini Nano on-device (Chrome, se o modelo estiver
+      disponível — a imagem nunca sai da máquina) e, se não conseguir, com o Gemini na nuvem através da
+      <code>certflow-api</code> (exige URL e chave configuradas na seção "Envio para API própria"
+      abaixo). Se a leitura falhar (imagem ilegível, IA fora do ar, Gemini sem créditos/cota), a
+      extensão reinicia a consulta automaticamente em vez de esperar você — só cai no modo manual de
+      espera se esta opção estiver desligada.
+    </p>
+    <p class="tab-hint">
+      Isso automatiza uma etapa que o TST provavelmente usa como barreira contra robôs — considere se
+      isso está dentro do uso aceitável do serviço antes de ligar. A leitura também não é garantida: um
+      captcha pode ser interpretado errado, o que a extensão trata reiniciando a consulta (contando como
+      mais uma tentativa) em vez de arriscar enviar uma resposta errada sem perceber.
+    </p>
+    <div class="field-row checkbox-row">
+      <label for="cndt-captcha-ai-enabled">Tentar resolver o captcha do CNDT com IA</label>
+      <input type="checkbox" id="cndt-captcha-ai-enabled" />
+    </div>
+    <div class="actions-row">
+      <button id="save-cndt-captcha-ai-btn" type="button">Salvar</button>
+    </div>
   </section>
 
   <section class="site-config" data-site="simples">

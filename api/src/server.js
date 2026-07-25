@@ -5,6 +5,8 @@ const rateLimit = require('express-rate-limit');
 const { saveLog, listLogs, getLog, deleteLog, isValidId, getRecentEventsForSite } = require('./logStore');
 const { saveSuggestion, getSuggestion, isValidSiteKey } = require('./suggestionStore');
 const { analyzeSite } = require('./analyzer');
+const { solveCaptchaImage } = require('./captcha');
+const { appendFeedback, getStats } = require('./captchaFeedbackStore');
 const { requireApiKey } = require('./auth');
 
 const app = express();
@@ -48,6 +50,9 @@ app.get('/', (req, res) => {
       'DELETE /api/logs/:id': 'Remove um lote.',
       'POST /api/analyze': 'Pede à IA para sugerir seletores a partir dos logs recentes de um site.',
       'GET /api/suggestions/:siteKey': 'Última sugestão de seletores gerada para um site.',
+      'POST /api/captcha/solve': 'Pede à IA (Gemini) para ler o texto de uma imagem de captcha.',
+      'POST /api/captcha/feedback': 'Registra se a leitura de captcha da IA acertou ou não (revisão futura, não é aprendizado do modelo).',
+      'GET /api/captcha/feedback/stats': 'Taxa de acerto registrada até agora (opcionalmente por site).',
     },
   });
 });
@@ -98,6 +103,30 @@ app.get('/api/suggestions/:siteKey', requireApiKey, (req, res) => {
   const record = getSuggestion(req.params.siteKey);
   if (!record) return res.status(404).json({ error: 'Nenhuma sugestão disponível ainda.' });
   res.json(record);
+});
+
+app.post('/api/captcha/solve', requireApiKey, async (req, res) => {
+  const { imageBase64, mime } = req.body || {};
+  if (typeof imageBase64 !== 'string' || !imageBase64) {
+    return res.status(400).json({ error: '"imageBase64" é obrigatório.' });
+  }
+  try {
+    const result = await solveCaptchaImage(imageBase64, mime);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(502).json({ error: `Falha ao consultar a IA: ${err.message || err}` });
+  }
+});
+
+app.post('/api/captcha/feedback', requireApiKey, (req, res) => {
+  const { siteKey, texto, success } = req.body || {};
+  if (typeof siteKey !== 'string') return res.status(400).json({ error: 'siteKey é obrigatório.' });
+  res.status(201).json(appendFeedback({ siteKey, texto, success }));
+});
+
+app.get('/api/captcha/feedback/stats', requireApiKey, (req, res) => {
+  res.json(getStats(req.query.siteKey));
 });
 
 app.get('/api/logs', requireApiKey, (req, res) => {

@@ -256,6 +256,17 @@
     alert('Configuração salva.');
   });
 
+  async function loadCndtCaptchaAiConfig() {
+    const { cndtCaptchaAiEnabled } = await browser.storage.local.get('cndtCaptchaAiEnabled');
+    document.getElementById('cndt-captcha-ai-enabled').checked = !!cndtCaptchaAiEnabled;
+  }
+
+  document.getElementById('save-cndt-captcha-ai-btn').addEventListener('click', async () => {
+    const cndtCaptchaAiEnabled = document.getElementById('cndt-captcha-ai-enabled').checked;
+    await browser.storage.local.set({ cndtCaptchaAiEnabled });
+    alert('Configuração salva.');
+  });
+
   async function loadReuseCertidaoConfig() {
     const { reuseExistingCertidao, reuseExistingCertidaoMinDays } = await browser.storage.local.get([
       'reuseExistingCertidao',
@@ -410,6 +421,7 @@
   loadTaskMiningConfig();
   loadVerboseDiagnosticsConfig();
   loadReuseCertidaoConfig();
+  loadCndtCaptchaAiConfig();
   renderAiSuggestions();
   setInterval(refreshTabHints, 3000);
 })();

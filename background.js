@@ -374,6 +374,60 @@ async function requestFreshAnalysis(siteKey) {
   }
 }
 
+/* Pede à certflow-api pra ler o texto de uma imagem de captcha via Gemini
+   (nuvem) — fallback do Gemini Nano on-device, usado quando o Nano não
+   está disponível (ex.: Firefox, ou Chrome sem o modelo baixado) ou não
+   conseguiu ler. AbortController com timeout: sem isso, uma chamada presa
+   (rede lenta, API travada) deixaria o content script esperando pra
+   sempre em vez de cair no fluxo manual depois de alguns segundos. */
+async function requestCaptchaSolve(siteKey, imageBase64, mime) {
+  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
+  if (!apiUrl || !apiKey) return { ok: false, error: 'Configure a URL e a chave da API primeiro (Configurações).' };
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${deriveApiBase(apiUrl)}/api/captcha/solve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ siteKey, imageBase64, mime }),
+      signal: controller.signal,
+    });
+    const body = await response.json();
+    /* Cobre tanto uma falha de infraestrutura (API própria fora do ar)
+       quanto o Gemini recusando por falta de créditos/cota — em ambos os
+       casos a resposta não é 2xx e isso já é tratado como "não deu pra
+       resolver", nunca propagado como exceção. */
+    if (!response.ok) return { ok: false, error: body.error || `HTTP ${response.status}` };
+    return { ok: true, texto: body.texto, confidence: body.confidence };
+  } catch (err) {
+    const message = err && err.name === 'AbortError' ? 'Tempo esgotado consultando a IA.' : String(err && err.message ? err.message : err);
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/* Só um registro pra revisão humana (nem o Gemini via API, nem o Nano
+   on-device, têm algum mecanismo de "aprender" a partir de uma chamada
+   individual — não existe ajuste fino em tempo real por request). Serve
+   pra, mais adiante, olhar a taxa de acerto real e ajustar o prompt do
+   captcha se necessário — mesmo espírito do log de diagnóstico que já
+   alimenta as sugestões de seletor. Fogo-e-esquece: nunca deve atrasar
+   nem falhar a execução por causa disso. */
+async function sendCaptchaFeedback(siteKey, texto, success) {
+  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
+  if (!apiUrl || !apiKey) return;
+  try {
+    await fetch(`${deriveApiBase(apiUrl)}/api/captcha/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ siteKey, texto, success }),
+    });
+  } catch (err) {
+    /* silencioso: é só telemetria pra revisão futura, nunca deve afetar o run */
+  }
+}
+
 /* Restaura runs a partir do storage se o service worker (Chrome MV3) foi
    encerrado por inatividade entre uma mensagem e outra — sem isso, uma
    execução em andamento "sumiria" silenciosamente no meio do fluxo. Só
@@ -781,6 +835,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'REQUEST_AI_ANALYSIS': {
         const result = await requestFreshAnalysis(msg.siteKey);
         sendResponse(result);
+        break;
+      }
+      case 'SOLVE_CAPTCHA': {
+        const result = await requestCaptchaSolve(msg.siteKey, msg.imageBase64, msg.mime);
+        sendResponse(result);
+        break;
+      }
+      case 'CAPTCHA_FEEDBACK': {
+        sendCaptchaFeedback(msg.siteKey, msg.texto, msg.success).catch(() => {});
+        sendResponse({ ok: true });
         break;
       }
       case 'DEBUG_LOG': {

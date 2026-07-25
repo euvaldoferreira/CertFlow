@@ -189,6 +189,35 @@ campo de resposta em `#idCampoResposta`, estilo jcaptcha) não bate com esse pad
 fazia a extensão nunca "ver" o captcha e clicar em "Emitir Certidão" sozinha, sem dar chance de resolvê-lo
 (bug real reportado por um usuário).
 
+**Resolução automática do captcha por IA (experimental, desligada por padrão)**: em Configurações →
+CNDT → "Resolver captcha automaticamente", é possível ligar uma tentativa de leitura automática da
+imagem do captcha antes de cair no fluxo manual acima. Duas fontes, nessa ordem:
+
+1. **Gemini Nano on-device** (Chrome, via `content/ai.js`, usando a Prompt API multimodal com entrada de
+   imagem) — a imagem nunca sai da máquina do usuário. Só funciona onde o Chrome já baixou o modelo e
+   suporta entrada de imagem; em qualquer outra situação (Firefox, Chrome sem o modelo) essa fonte
+   simplesmente não existe e a extensão já cai na próxima.
+2. **Gemini na nuvem**, através da `certflow-api` própria do usuário (mesma URL/chave configuradas para
+   sugestão de seletores) — endpoint `POST /api/captcha/solve`, que envia a imagem pro Gemini com um
+   prompt pedindo a transcrição exata dos caracteres.
+
+Enquanto espera a resposta da IA, a página mostra um banner com um spinner ("CertFlow: resolvendo
+captcha com IA..."), já que a chamada pode levar alguns segundos. Se **nenhuma** das duas fontes
+conseguir ler o captcha com confiança — imagem ilegível, Nano indisponível, API própria fora do ar, ou o
+Gemini recusando por falta de créditos/cota — a extensão **reinicia a consulta** (recarrega a aba e tenta
+de novo, reaproveitando o mesmo mecanismo de retry de "serviço temporariamente indisponível", até 3
+vezes) em vez de simplesmente esperar o usuário; só quando essa opção está **desligada** é que o fluxo
+manual de sempre entra em jogo. Cada tentativa de leitura (acertou ou não, verificado observando se um
+resultado real apareceu depois do envio) é registrada via `POST /api/captcha/feedback` na `certflow-api`
+— isso é só um log para revisão humana futura (nem o Gemini via API nem o Nano local têm algum mecanismo
+de aprendizado a partir de uma chamada individual; não existe ajuste fino em tempo real), no mesmo
+espírito do log de diagnóstico que já alimenta as sugestões de seletor.
+
+Automatizar essa etapa significa contornar uma barreira que o TST provavelmente usa contra robôs —
+considere se isso está dentro do uso aceitável do serviço antes de ligar a opção. Também nunca escolhe
+sozinha uma eventual opção de "enviar por e-mail" quando o fluxo oferecer escolha de entrega — qualquer
+botão/link com "e-mail" no texto é excluído dos cliques automáticos.
+
 Normalmente gera o PDF na hora, logo depois do captcha, do mesmo jeito que RFB e Caixa — mas esse site
 também pode responder que a certidão foi **enviada por e-mail** em vez de mostrar um link de download. A
 extensão já reconhece essa mensagem ("emitida e enviada por e-mail") como sucesso; nesse caso o item

@@ -136,6 +136,16 @@
      genérico, porque essa frase também contém "certidão emitida" e cairia
      no caminho normal de "procurar botão de baixar", que aqui não existe. */
   const EMAIL_SENT_HINTS = /emitida\s+e\s+enviada\s+por\s+e-?mail|enviad[ao]\s+por\s+e-?mail\s+com\s+sucesso|certid[aã]o\s+ser[aá]\s+enviada\s+por\s+e-?mail/i;
+  /* Heurística pra achar a IMAGEM do captcha (não o widget genérico de
+     reCAPTCHA/hCaptcha, que detectCaptcha() já cobre) — usada só quando a
+     resolução automática por IA está ligada (ver tryAutoSolveCaptcha). Um
+     <img> com esses termos no src/alt/id/class costuma ser o desafio
+     visual em si, não uma logo ou ícone decorativo. */
+  const CAPTCHA_IMAGE_HINTS = /captcha|imagem.{0,15}verifica|c[oó]digo.{0,10}imagem|desafio/i;
+  /* Usado para excluir, de qualquer clique automático, uma opção de
+     "enviar por e-mail" quando o fluxo oferecer escolha de entrega — ver
+     findButtonHeuristic(). */
+  const EMAIL_OPTION_HINTS = /e-?mail/i;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -253,7 +263,14 @@
     )
       .filter(isVisible)
       .filter((el) => !el.disabled)
-      .filter((el) => !isInExcludedContext(el));
+      .filter((el) => !isInExcludedContext(el))
+      /* Nenhum dos nossos padrões de emitir/consultar/baixar deveria
+         legitimamente casar com um botão que fale em "e-mail" — quando
+         isso acontece, é quase sempre a opção "enviar por e-mail" de um
+         fluxo com escolha de entrega, e a extensão nunca deve escolher
+         essa opção sozinha (pedido explícito do usuário: preferir sempre
+         o caminho que baixa/mostra a certidão direto). */
+      .filter((el) => !EMAIL_OPTION_HINTS.test(textOf(el)));
 
     for (const pattern of patterns) {
       const match = candidates.find((el) => pattern.test(textOf(el)));
@@ -283,6 +300,39 @@
     if (widget) return { present: true, el: widget };
 
     return { present: false, el: null };
+  }
+
+  /* Acha a imagem do captcha próprio do site (não um widget de terceiro —
+     esses já são cobertos por detectCaptcha()). Tenta primeiro por
+     src/alt/id/class que sugira captcha; se nada bater, procura o <img>
+     visível mais próximo do campo de resposta conhecido do site (subindo
+     pela árvore do DOM), já que nesses portais a imagem normalmente fica
+     ao lado do campo onde a resposta é digitada. Retorna null (não
+     arrisca um palpite, tipo a primeira imagem da página) se nenhuma das
+     duas estratégias achar nada — quem chama trata isso como "não dá pra
+     tentar resolver automaticamente" e cai no fluxo manual. */
+  function findCaptchaImageHeuristic(siteKey) {
+    const images = Array.from(document.querySelectorAll('img')).filter(isVisible);
+    const byHint = images.find(
+      (img) =>
+        CAPTCHA_IMAGE_HINTS.test(img.src || '') ||
+        CAPTCHA_IMAGE_HINTS.test(img.alt || '') ||
+        CAPTCHA_IMAGE_HINTS.test(img.id || '') ||
+        CAPTCHA_IMAGE_HINTS.test(img.className || '')
+    );
+    if (byHint) return byHint;
+
+    const answerSelector = POST_FILL_FOCUS_SELECTOR[siteKey];
+    const answerField = answerSelector && document.querySelector(answerSelector);
+    if (!answerField) return null;
+    let node = answerField;
+    for (let i = 0; i < 6 && node; i++) {
+      node = node.parentElement;
+      if (!node) break;
+      const img = Array.from(node.querySelectorAll('img')).filter(isVisible)[0];
+      if (img) return img;
+    }
+    return null;
   }
 
   /* document.body.innerText inclui menu, cabeçalho e rodapé — em portais
@@ -1188,6 +1238,133 @@
     sendStatus(siteKey, 'manual_save_needed');
   }
 
+  async function imageElementToBlob(img) {
+    try {
+      const response = await fetch(img.src);
+      return await response.blob();
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /* Indicador visual (banner fixo no topo da página + spinner girando)
+     enquanto a extensão espera a IA (Nano local ou Gemini na nuvem)
+     tentar ler o captcha — essa chamada pode levar alguns segundos, e sem
+     nenhum feedback a página fica parada sem explicação nenhuma nesse
+     meio tempo. Retorna a função que remove o banner. */
+  function showCaptchaSolvingOverlay() {
+    const overlay = document.createElement('div');
+    overlay.id = 'certflow-captcha-solving-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed', top: '0', left: '0', right: '0', zIndex: 2147483647,
+      background: '#1f6f4a', color: '#fff', padding: '8px 12px',
+      font: '13px/1.4 sans-serif', textAlign: 'center', boxShadow: '0 2px 6px rgba(0,0,0,.3)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+    });
+
+    const spinner = document.createElement('span');
+    Object.assign(spinner.style, {
+      display: 'inline-block', width: '14px', height: '14px',
+      border: '2px solid rgba(255,255,255,.4)', borderTopColor: '#fff',
+      borderRadius: '50%', animation: 'certflow-captcha-spin 0.8s linear infinite',
+    });
+
+    if (!document.getElementById('certflow-captcha-spin-keyframes')) {
+      const style = document.createElement('style');
+      style.id = 'certflow-captcha-spin-keyframes';
+      style.textContent = '@keyframes certflow-captcha-spin { to { transform: rotate(360deg); } }';
+      document.head.appendChild(style);
+    }
+
+    const label = document.createElement('span');
+    label.textContent = 'CertFlow: resolvendo captcha com IA...';
+
+    overlay.appendChild(spinner);
+    overlay.appendChild(label);
+    document.documentElement.appendChild(overlay);
+    return () => overlay.remove();
+  }
+
+  /* Tenta resolver o captcha próprio do site (imagem de texto distorcido)
+     usando IA, ANTES de cair no fluxo manual (que sempre funciona, mas
+     exige o usuário resolver e clicar). Duas fontes, nessa ordem:
+     1. Gemini Nano on-device (Chrome, via content/ai.js — só existe nesse
+        navegador; em outros, a função global nem existe).
+     2. Gemini na nuvem, através da certflow-api própria do usuário (exige
+        apiUrl/apiKey configurados em Configurações) — mesmo caminho já
+        usado para sugestão de seletores.
+     As duas fontes podem falhar por motivos fora do nosso controle (Nano
+     não baixado ainda, API própria fora do ar, chave do Gemini sem
+     créditos/cota estourada, resposta bloqueada por segurança) — qualquer
+     falha aqui é tratada só como "não deu pra resolver agora", nunca como
+     erro fatal da execução.
+     Retorna { enabled, solved }: "enabled" indica se a resolução por IA
+     está ligada nas Configurações (quem chama usa isso pra decidir o que
+     fazer quando "solved" for false — reiniciar a consulta se a IA
+     estava ligada e falhou, ou cair no fluxo manual normal se estava
+     desligada). */
+  async function tryAutoSolveCaptcha(siteKey, selectorOverrides) {
+    const { cndtCaptchaAiEnabled } = await browser.storage.local.get('cndtCaptchaAiEnabled');
+    if (!cndtCaptchaAiEnabled) return { enabled: false, solved: false };
+
+    let hideOverlay = null;
+    try {
+      const img = resolveElement('captchaImage', siteKey, selectorOverrides, () => findCaptchaImageHeuristic(siteKey));
+      const answerSelector = POST_FILL_FOCUS_SELECTOR[siteKey];
+      const answerField = answerSelector && document.querySelector(answerSelector);
+      if (!img || !answerField) {
+        recordDebug(siteKey, 'captcha_ai_no_target', 'Imagem do captcha ou campo de resposta não encontrado.');
+        return { enabled: true, solved: false };
+      }
+      recordDebug(siteKey, 'captcha_ai_attempt', elementToSelector(img));
+      hideOverlay = showCaptchaSolvingOverlay();
+
+      let texto = null;
+      let source = null;
+      if (typeof solveCaptchaImageWithNano === 'function') {
+        try {
+          const blob = await imageElementToBlob(img);
+          if (blob) texto = await solveCaptchaImageWithNano(siteKey, blob);
+          if (texto) source = 'nano';
+        } catch (err) {
+          recordDebug(siteKey, 'captcha_ai_nano_error', String(err && err.message ? err.message : err));
+        }
+      }
+
+      if (!texto) {
+        try {
+          const { base64, mime } = await fetchAsBase64(img.src);
+          const response = await browser.runtime.sendMessage({ type: 'SOLVE_CAPTCHA', siteKey, imageBase64: base64, mime });
+          if (response && response.ok && response.texto && response.confidence !== 'low') {
+            texto = response.texto;
+            source = 'cloud';
+          } else if (response && !response.ok) {
+            /* Cobre tanto erro de rede/API própria fora do ar quanto o
+               Gemini recusando por falta de créditos/cota — em qualquer
+               caso, response.ok é false e texto continua null. */
+            recordDebug(siteKey, 'captcha_ai_cloud_error', response.error || 'erro desconhecido');
+          }
+        } catch (err) {
+          recordDebug(siteKey, 'captcha_ai_cloud_error', String(err && err.message ? err.message : err));
+        }
+      }
+
+      if (!texto) {
+        recordDebug(siteKey, 'captcha_ai_failed', 'IA não conseguiu ler o captcha (ou confiança baixa).', true);
+        return { enabled: true, solved: false };
+      }
+
+      setNativeValue(answerField, texto);
+      recordDebug(siteKey, 'captcha_ai_filled', `Campo de resposta preenchido pela IA (${source}): "${texto}"`);
+      return { enabled: true, solved: true, texto, source };
+    } catch (err) {
+      recordDebug(siteKey, 'captcha_ai_error', String(err && err.message ? err.message : err));
+      return { enabled: true, solved: false };
+    } finally {
+      hideOverlay?.();
+    }
+  }
+
   /* Fluxo genérico reaproveitado pelos sites automatizados: preenche o
      CNPJ, envia o formulário, aguarda captcha (se aparecer) e resultado, e
      então localiza um jeito de salvar o PDF — link direto (download
@@ -1256,7 +1433,37 @@
          detectar, só assumir e esperar o usuário resolver e enviar. */
       const captchaAlreadyPresent = SUBMIT_REQUIRES_CAPTCHA_FIRST.has(siteKey);
 
-      if (captchaAlreadyPresent) {
+      /* Se a resolução automática por IA estiver ligada (Configurações) e
+         conseguir ler o captcha com confiança, o campo de resposta já sai
+         preenchido daqui e o fluxo cai direto no clique automático abaixo,
+         igual a um site sem captcha nenhum. Se a IA estava LIGADA mas não
+         conseguiu resolver (Nano indisponível, API própria fora do ar,
+         Gemini sem créditos/cota, imagem ilegível), reinicia a consulta
+         em vez de esperar o usuário — pedido explícito: se a resolução
+         automática falhar, tentar de novo do zero, não cair pro manual
+         silenciosamente. Reaproveita o mesmo mecanismo de retry/reload já
+         usado para "serviço temporariamente indisponível" (até
+         UNAVAILABLE_MAX_RETRIES tentativas, depois falha o job). Só quando
+         a IA está DESLIGADA é que o fluxo manual de sempre entra em jogo —
+         nesse caso nada muda pro usuário. */
+      const captchaAutoSolveResult = captchaAlreadyPresent
+        ? await tryAutoSolveCaptcha(siteKey, selectorOverrides)
+        : { enabled: false, solved: false };
+
+      function reportCaptchaFeedback(success) {
+        if (captchaAutoSolveResult.solved && captchaAutoSolveResult.source === 'cloud') {
+          browser.runtime
+            .sendMessage({ type: 'CAPTCHA_FEEDBACK', siteKey, texto: captchaAutoSolveResult.texto, success })
+            .catch(() => {});
+        }
+      }
+
+      if (captchaAlreadyPresent && captchaAutoSolveResult.enabled && !captchaAutoSolveResult.solved) {
+        reportUnavailable(siteKey, 'Não foi possível resolver o captcha automaticamente com IA — reiniciando a consulta.');
+        return;
+      }
+
+      if (captchaAlreadyPresent && !captchaAutoSolveResult.solved) {
         recordDebug(siteKey, 'captcha_before_submit', 'Captcha detectado antes do envio — aguardando o usuário resolver e clicar em emitir/consultar manualmente.');
         sendStatus(siteKey, 'captcha');
         const outcome = await waitFor(() => {
@@ -1348,6 +1555,12 @@
       }
 
       if (!outcome) {
+        /* Nenhum resultado/indisponibilidade reconhecido depois de enviar
+           com a resposta que a IA deu pro captcha — o melhor sinal que
+           temos de que a leitura provavelmente saiu errada (o site não
+           reconheceu a resposta como esperado). Reportado como feedback
+           de falha só quando essa consulta usou a solução automática. */
+        reportCaptchaFeedback(false);
         const verdict = typeof classifyPageWithAI === 'function' ? await classifyPageWithAI(siteKey) : null;
         if (verdict && verdict.status === 'indisponivel_temporario') {
           reportUnavailable(siteKey, verdict.resumo);
@@ -1358,6 +1571,7 @@
         return;
       }
 
+      reportCaptchaFeedback(true);
       await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
     } catch (err) {
       sendStatus(siteKey, 'error', String(err && err.message ? err.message : err));

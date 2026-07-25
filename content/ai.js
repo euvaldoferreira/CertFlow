@@ -113,5 +113,83 @@ deve ser true apenas quando status for "indisponivel_temporario".`;
     }
   }
 
+  /* Resolve o texto de uma imagem de captcha usando o Gemini Nano
+     multimodal (entrada de imagem), 100% on-device — a imagem nunca sai
+     da máquina do usuário. Só existe onde a Prompt API aceita imagem
+     como entrada; em qualquer outra situação (API ausente, modelo não
+     baixado, versão do Chrome sem suporte a imagem) retorna null e quem
+     chamou cai no fallback da API na nuvem. */
+  const CAPTCHA_RESPONSE_SCHEMA = {
+    type: 'object',
+    properties: { texto: { type: 'string' } },
+    required: ['texto'],
+  };
+
+  const CAPTCHA_SYSTEM_PROMPT = `Você recebe uma imagem de captcha (letras e/ou números distorcidos,
+possivelmente com ruído visual como círculos, linhas ou traços ao redor), usada por um portal do
+governo brasileiro para confirmar que quem preenche o formulário é uma pessoa, não um robô de varredura
+em massa — este uso é a automação do próprio titular preenchendo seu próprio pedido de certidão.
+Transcreva EXATAMENTE os caracteres visíveis, na ordem em que aparecem, sem espaços. Se não conseguir
+ler com confiança razoável, responda com "texto" vazio. Responda SOMENTE com o JSON {"texto": "..."}.`;
+
+  function parseCaptchaText(raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.texto === 'string') return parsed.texto.trim();
+    } catch (err) {
+      const match = /\{[\s\S]*\}/.exec(raw || '');
+      if (match) {
+        try {
+          return parseCaptchaText(match[0]);
+        } catch (err2) {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function solveCaptchaImageWithNano(siteKey, imageBlob) {
+    const engine = getEngine();
+    if (!engine) return null;
+
+    let session = null;
+    try {
+      const availability = await engine.availability({ expectedInputs: [{ type: 'image' }] });
+      if (availability !== 'available') {
+        CertFlow?.recordDebug?.(siteKey, 'captcha_ai_nano_unavailable', `Modelo multimodal não pronto (status: ${availability}).`);
+        return null;
+      }
+
+      session = await engine.create({
+        initialPrompts: [{ role: 'system', content: CAPTCHA_SYSTEM_PROMPT }],
+        expectedInputs: [{ type: 'image' }],
+      });
+
+      const bitmap = await createImageBitmap(imageBlob);
+      const promptMessages = [{ role: 'user', content: [{ type: 'image', value: bitmap }] }];
+      let raw;
+      try {
+        raw = await session.prompt(promptMessages, { responseConstraint: CAPTCHA_RESPONSE_SCHEMA });
+      } catch (err) {
+        raw = await session.prompt(promptMessages);
+      }
+
+      const texto = parseCaptchaText(raw);
+      if (!texto) {
+        CertFlow?.recordDebug?.(siteKey, 'captcha_ai_nano_parse_failed', String(raw || '').slice(0, 200));
+        return null;
+      }
+      CertFlow?.recordDebug?.(siteKey, 'captcha_ai_nano_result', `texto="${texto}"`);
+      return texto;
+    } catch (err) {
+      CertFlow?.recordDebug?.(siteKey, 'captcha_ai_nano_error', String(err && err.message ? err.message : err));
+      return null;
+    } finally {
+      session?.destroy?.();
+    }
+  }
+
   window.classifyPageWithAI = classifyPageWithAI;
+  window.solveCaptchaImageWithNano = solveCaptchaImageWithNano;
 })();

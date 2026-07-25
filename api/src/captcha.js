@@ -1,6 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
 
-const MODEL = 'gemini-3.6-flash';
+const MODEL = 'gemini-3.5-flash-lite';
 
 /* O captcha é a barreira de "confirma que é uma pessoa" do próprio site —
    o uso aqui é o titular do CNPJ automatizando o próprio pedido de
@@ -8,9 +8,7 @@ const MODEL = 'gemini-3.6-flash';
    explícito no prompt porque é o contexto real da requisição, não pra
    contornar alguma recusa do modelo. */
 const SYSTEM_PROMPT = `Você ajuda a ler um captcha de texto (imagem com letras e/ou números
-distorcidos, possivelmente com ruído visual como círculos, linhas ou traços ao redor) de um portal do
-governo brasileiro (TST — Certidão Negativa de Débitos Trabalhistas). Quem está automatizando este
-preenchimento é o próprio titular do CNPJ, obtendo sua própria certidão.
+distorcidos, possivelmente com ruído visual como círculos, linhas ou traços ao redor).
 
 Transcreva EXATAMENTE os caracteres visíveis na imagem, na ordem em que aparecem, sem espaços,
 respeitando maiúsculas/minúsculas quando for possível distinguir com segurança. Se a imagem não for um

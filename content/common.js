@@ -335,6 +335,9 @@
     return null;
   }
 
+  const DETECTION_EXCLUDE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'HEADER', 'NAV', 'FOOTER', 'A']);
+  const DETECTION_EXCLUDE_ROLES = new Set(['navigation', 'banner', 'contentinfo']);
+
   /* document.body.innerText inclui menu, cabeçalho e rodapé — em portais
      como o da Caixa, o próprio link de navegação permanente ("Certificado
      de Regularidade do FGTS - CRF") já bate com o padrão genérico de
@@ -344,21 +347,44 @@
      qualquer resposta de servidor). Por isso os detectores de captcha/
      resultado/indisponibilidade usam este texto, que exclui cabeçalho,
      navegação, rodapé e qualquer link — o conteúdo de um resultado real
-     é sempre texto simples da página, nunca um item de menu clicável. */
+     é sempre texto simples da página, nunca um item de menu clicável.
+
+     Antes isso era feito clonando document.body e removendo os elementos
+     indesejados do clone — mas um clone é um nó DESANEXADO do documento, e
+     tanto .innerText quanto qualquer checagem de visibilidade (que dependem
+     de layout/CSS computado) não funcionam de forma confiável nele: sem
+     estar de verdade no documento, o navegador não tem como saber o que
+     está com display:none ou visibility:hidden. Isso não só deixava
+     escapar o conteúdo de <script>/<style> (já corrigido antes com a
+     remoção explícita desses dois), como também deixava vazar QUALQUER
+     outro texto escondido por CSS — como um bloco de ajuda/instruções
+     oculto que, confirmado por um usuário no CNDT, já continha de
+     antemão, como exemplo, as próprias frases de sucesso que detectamos
+     como resultado, fazendo a extensão "ver" um resultado que nunca
+     esteve de fato visível na tela.
+
+     Por isso agora caminha pelo DOM AO VIVO (nunca um clone) com
+     TreeWalker, cortando fora (sem nem descer) qualquer elemento
+     excluído por tag/role ou que isVisible() reprove — isVisible() só
+     funciona de forma confiável em elementos realmente anexados, com
+     layout de verdade. */
   function detectionText() {
-    const clone = document.body.cloneNode(true);
-    /* script/style/noscript nunca deveriam aparecer em texto visível — mas
-       o clone é um nó DESANEXADO do documento, e .innerText (que respeita
-       display:none) pode não funcionar corretamente em nós desanexados
-       em alguns navegadores, caindo no fallback .textContent, que NÃO
-       respeita CSS/rendering e inclui o conteúdo de <script> igual a
-       qualquer outro texto. Bug real confirmado por um usuário: o texto
-       capturado como "temporariamente indisponível" era na verdade
-       código JavaScript da própria página ($('#GerarPDF').click(...)),
-       fazendo a extensão achar que o site estava fora do ar quando na
-       verdade o resultado (botão "Gerar PDF") já estava disponível. */
-    clone.querySelectorAll('header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"], a, script, style, noscript').forEach((el) => el.remove());
-    return clone.innerText || clone.textContent || '';
+    let text = '';
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+        if (DETECTION_EXCLUDE_TAGS.has(node.tagName)) return NodeFilter.FILTER_REJECT;
+        const role = node.getAttribute && node.getAttribute('role');
+        if (role && DETECTION_EXCLUDE_ROLES.has(role)) return NodeFilter.FILTER_REJECT;
+        if (!isVisible(node)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_SKIP;
+      },
+    });
+    let node;
+    while ((node = walker.nextNode())) {
+      text += `${node.nodeValue} `;
+    }
+    return text;
   }
 
   function detectResult() {
@@ -377,27 +403,22 @@
     return TEMP_UNAVAILABLE_HINTS.test(bodyText);
   }
 
-  /* O CNDT tem um texto de ajuda/instrução na própria tela inicial (antes
-     de resolver o captcha) que já lista, como exemplo, as mensagens
-     possíveis — incluindo literalmente "Certidão EMITIDA com sucesso" e
-     "Certidão EMITIDA e ENVIADA por e-mail com sucesso" — o que batia com
-     RESULT_TEXT_HINTS/EMAIL_SENT_HINTS antes mesmo do captcha ser
-     resolvido (confirmado por um usuário: a extensão clicava em "Emitir
-     Certidão" repetidas vezes e reportava sucesso por e-mail sem o
-     captcha nem ter carregado). Para este site, só aceita detectResult()
-     como um resultado de verdade quando o formulário (campo de CNPJ) já
-     tiver saído da página — mesmo princípio já usado no início de
-     runFlow() para não confundir a descrição do serviço com um resultado
-     real. Não se aplica aos outros sites porque, neles, o campo de CNPJ
-     pode legitimamente continuar na página mesmo depois de um resultado
-     real aparecer (ex.: Caixa). */
-  function isResultConfirmed(siteKey, selectorOverrides) {
-    if (!detectResult()) return false;
-    if (siteKey === 'cndt') {
-      return !resolveElement('cnpjInput', siteKey, selectorOverrides, findCnpjInputHeuristic);
-    }
-    return true;
-  }
+  /* Chegou a existir aqui uma exigência extra pro CNDT (só aceitar
+     detectResult() quando o campo de CNPJ já tivesse saído da página) pra
+     evitar um falso positivo: a tela inicial do captcha continha, como
+     texto de ajuda, as próprias frases de sucesso que
+     RESULT_TEXT_HINTS/EMAIL_SENT_HINTS procuram. Essa exigência causou uma
+     REGRESSÃO confirmada por um usuário: uma emissão real e bem-sucedida
+     (captcha lido corretamente pela IA, certidão de fato emitida e enviada
+     por e-mail) foi reportada como falha, porque o campo de CNPJ continua
+     na página mesmo depois de um resultado real no CNDT. A causa raiz de
+     verdade era outra: esse texto de ajuda estava ESCONDIDO por CSS, e
+     detectionText() (baseada num clone desanexado do documento) não tinha
+     como saber disso — clones desanexados não têm layout, então nenhuma
+     checagem de visibilidade funciona neles de forma confiável. Corrigido
+     direto em detectionText(), que agora caminha pelo DOM ao vivo
+     respeitando visibilidade de verdade — por isso detectResult() sozinho
+     já é confiável de novo, sem precisar de remendo específico pro CNDT. */
 
   function detectEmailSent() {
     const bodyText = detectionText();
@@ -1331,6 +1352,60 @@
     return () => overlay.remove();
   }
 
+  /* Aviso curto (some sozinho) do resultado de uma tentativa de leitura do
+     captcha por IA — sucesso ou falha. Sempre visível pro usuário, nunca
+     bloqueia nada: é só informativo, o fluxo (automático ou manual)
+     continua exatamente igual independente do que o usuário fizer com
+     esse aviso. */
+  function showCaptchaFeedbackToast(message, kind) {
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    Object.assign(toast.style, {
+      position: 'fixed', bottom: '16px', right: '16px', zIndex: 2147483647,
+      background: kind === 'success' ? '#1f6f4a' : '#8a2f2f', color: '#fff',
+      padding: '10px 14px', borderRadius: '6px', font: '13px/1.4 sans-serif',
+      boxShadow: '0 2px 8px rgba(0,0,0,.35)', maxWidth: '320px',
+    });
+    document.documentElement.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
+  }
+
+  /* Botão flutuante que dá ao usuário um jeito de pedir, na hora, uma
+     tentativa de leitura do captcha por IA — útil tanto quando a
+     resolução automática está desligada quanto quando ela já tentou e
+     falhou (o botão deixa tentar de novo, ex.: depois de uma imagem nova
+     carregar). Nunca substitui o clique em "Emitir Certidão": só preenche
+     o campo de resposta quando consegue, com aviso visível de
+     sucesso/falha (via tryAutoSolveCaptcha/showCaptchaFeedbackToast) —
+     quem decide clicar em emitir continua sendo sempre o usuário aqui.
+     Retorna a função que remove o botão. */
+  function showManualCaptchaAiButton(siteKey, selectorOverrides) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const originalLabel = 'CertFlow: tentar ler captcha com IA';
+    btn.textContent = originalLabel;
+    Object.assign(btn.style, {
+      position: 'fixed', bottom: '16px', left: '16px', zIndex: 2147483647,
+      background: '#1f6f4a', color: '#fff', border: 'none', borderRadius: '6px',
+      padding: '10px 14px', font: '13px/1.4 sans-serif', cursor: 'pointer',
+      boxShadow: '0 2px 8px rgba(0,0,0,.35)',
+    });
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'CertFlow: lendo captcha...';
+      try {
+        await tryAutoSolveCaptcha(siteKey, selectorOverrides, { forceAttempt: true });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
+    });
+
+    document.documentElement.appendChild(btn);
+    return () => btn.remove();
+  }
+
   /* Tenta resolver o captcha próprio do site (imagem de texto distorcido)
      usando IA, ANTES de cair no fluxo manual (que sempre funciona, mas
      exige o usuário resolver e clicar). Duas fontes, nessa ordem:
@@ -1345,13 +1420,15 @@
      falha aqui é tratada só como "não deu pra resolver agora", nunca como
      erro fatal da execução.
      Retorna { enabled, solved }: "enabled" indica se a resolução por IA
-     está ligada nas Configurações (quem chama usa isso pra decidir o que
-     fazer quando "solved" for false — reiniciar a consulta se a IA
-     estava ligada e falhou, ou cair no fluxo manual normal se estava
-     desligada). */
-  async function tryAutoSolveCaptcha(siteKey, selectorOverrides) {
+     está ligada nas Configurações OU se foi um pedido explícito via botão
+     (forceAttempt) — quem chama usa isso pra decidir se deve mostrar
+     algum aviso. Toda tentativa que efetivamente roda (achou imagem e
+     campo de resposta) mostra um aviso visível de sucesso/falha na
+     própria página — nunca trava nada: se falhar, quem chamou sempre cai
+     no fluxo manual normal, exatamente como se essa função não existisse. */
+  async function tryAutoSolveCaptcha(siteKey, selectorOverrides, { forceAttempt = false } = {}) {
     const { cndtCaptchaAiEnabled } = await browser.storage.local.get('cndtCaptchaAiEnabled');
-    if (!cndtCaptchaAiEnabled) return { enabled: false, solved: false };
+    if (!cndtCaptchaAiEnabled && !forceAttempt) return { enabled: false, solved: false };
 
     let hideOverlay = null;
     try {
@@ -1374,6 +1451,7 @@
       const answerField = answerSelector && document.querySelector(answerSelector);
       if (!img || !answerField) {
         recordDebug(siteKey, 'captcha_ai_no_target', 'Imagem do captcha ou campo de resposta não encontrado.');
+        showCaptchaFeedbackToast('CertFlow: não encontrei a imagem do captcha para ler com IA. Resolva manualmente.', 'error');
         return { enabled: true, solved: false };
       }
       recordDebug(siteKey, 'captcha_ai_attempt', elementToSelector(img));
@@ -1427,14 +1505,17 @@
 
       if (!texto) {
         recordDebug(siteKey, 'captcha_ai_failed', 'IA não conseguiu ler o captcha (ou confiança baixa).', true);
+        showCaptchaFeedbackToast('CertFlow: a IA não conseguiu ler o captcha. Resolva manualmente.', 'error');
         return { enabled: true, solved: false };
       }
 
       setNativeValue(answerField, texto);
       recordDebug(siteKey, 'captcha_ai_filled', `Campo de resposta preenchido pela IA (${source}): "${texto}"`);
+      showCaptchaFeedbackToast(`CertFlow: captcha lido pela IA ("${texto}") e preenchido.`, 'success');
       return { enabled: true, solved: true, texto, source };
     } catch (err) {
       recordDebug(siteKey, 'captcha_ai_error', String(err && err.message ? err.message : err));
+      showCaptchaFeedbackToast('CertFlow: erro ao tentar ler o captcha com IA. Resolva manualmente.', 'error');
       return { enabled: true, solved: false };
     } finally {
       hideOverlay?.();
@@ -1536,22 +1617,34 @@
       if (captchaAlreadyPresent && !captchaAutoSolveResult.solved) {
         recordDebug(siteKey, 'captcha_before_submit', 'Captcha detectado antes do envio — aguardando o usuário resolver e clicar em emitir/consultar manualmente.');
         sendStatus(siteKey, 'captcha');
-        const outcome = await waitFor(() => {
-          if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
-          if (isResultConfirmed(siteKey, selectorOverrides)) return { type: 'result' };
-          return null;
-        }, { timeout: 300000, interval: 400 });
-        if (!outcome) {
-          recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após a resolução do captcha e o envio manual (5 min).', true);
-          sendStatus(siteKey, 'error', 'Tempo esgotado aguardando a resolução do captcha e o envio.');
+        /* Botão manual: uma alternativa a esperar a resolução automática
+           (ou a ela ter falhado) — o usuário pode pedir uma tentativa de
+           leitura por IA a qualquer momento, sem travar nada. Só preenche
+           o campo de resposta com o palpite (com aviso visível de
+           sucesso/falha); NUNCA clica em "Emitir Certidão" sozinho — isso
+           continua sendo sempre uma ação do usuário, mesmo quando a IA
+           acerta o captcha por este caminho. */
+        const hideAiButton = showManualCaptchaAiButton(siteKey, selectorOverrides);
+        try {
+          const outcome = await waitFor(() => {
+            if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
+            if (detectResult()) return { type: 'result' };
+            return null;
+          }, { timeout: 300000, interval: 400 });
+          if (!outcome) {
+            recordDebug(siteKey, 'captcha_timeout', 'Resultado não apareceu após a resolução do captcha e o envio manual (5 min).', true);
+            sendStatus(siteKey, 'error', 'Tempo esgotado aguardando a resolução do captcha e o envio.');
+            return;
+          }
+          if (outcome.type === 'unavailable') {
+            reportUnavailable(siteKey);
+            return;
+          }
+          await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
           return;
+        } finally {
+          hideAiButton();
         }
-        if (outcome.type === 'unavailable') {
-          reportUnavailable(siteKey);
-          return;
-        }
-        await processResult(siteKey, cnpj, selectorOverrides, forceEmitNew);
-        return;
       }
 
       const submit = await waitFor(
@@ -1584,7 +1677,7 @@
           if (Date.now() - pollStartedAt < MIN_OUTCOME_DELAY_MS) return null;
           if (detectCaptcha().present) return { type: 'captcha' };
           if (detectTemporarilyUnavailable()) return { type: 'unavailable' };
-          if (isResultConfirmed(siteKey, selectorOverrides)) return { type: 'result' };
+          if (detectResult()) return { type: 'result' };
           return null;
         }, { timeout: timeoutMs, interval: 400 });
       }

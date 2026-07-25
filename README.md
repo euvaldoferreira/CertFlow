@@ -189,6 +189,20 @@ campo de resposta em `#idCampoResposta`, estilo jcaptcha) não bate com esse pad
 fazia a extensão nunca "ver" o captcha e clicar em "Emitir Certidão" sozinha, sem dar chance de resolvê-lo
 (bug real reportado por um usuário).
 
+Outro bug real, mais sutil: a tela inicial do captcha do CNDT tinha um texto de ajuda contendo, de
+antemão, as próprias frases usadas para reconhecer sucesso ("Certidão EMITIDA com sucesso...", "...
+enviada por e-mail com sucesso"), fazendo a extensão "detectar resultado" milissegundos depois de
+preencher o CNPJ e clicar em "Emitir Certidão" repetidas vezes sem o captcha nem ter carregado. A
+correção inicial (só aceitar um resultado quando o campo de CNPJ já tivesse saído da página) causou uma
+**regressão**: uma emissão real e bem-sucedida passou a ser reportada como falha, porque o campo de CNPJ
+continua na página mesmo depois de um resultado real no CNDT. A causa raiz de verdade era outra: esse
+texto de ajuda estava **escondido por CSS**, e a função que extrai o texto visível da página
+(`detectionText()`) usava um clone de `document.body` desanexado do documento — clones desanexados não
+têm layout, então nenhuma checagem de visibilidade (`display:none`, `visibility:hidden`) funciona neles
+de forma confiável, deixando esse texto escondido vazar como se fosse visível. Corrigido reescrevendo
+`detectionText()` para caminhar pelo DOM **ao vivo** (nunca mais um clone), cortando fora qualquer
+elemento escondido ou excluído sem nem descer nos filhos.
+
 **Resolução automática do captcha por IA (experimental, desligada por padrão)**: em Configurações →
 CNDT → "Resolver captcha automaticamente", é possível ligar uma tentativa de leitura automática da
 imagem do captcha antes de cair no fluxo manual acima. Duas fontes, nessa ordem:
@@ -204,18 +218,26 @@ imagem do captcha antes de cair no fluxo manual acima. Duas fontes, nessa ordem:
    prompt pedindo a transcrição exata dos caracteres.
 
 Enquanto espera a resposta da IA, a página mostra um banner com um spinner ("CertFlow: resolvendo
-captcha com IA..."), já que a chamada pode levar alguns segundos. Se **nenhuma** das duas fontes
-conseguir ler o captcha com confiança — imagem ilegível, Nano indisponível, API própria fora do ar, ou o
-Gemini recusando por falta de créditos/cota — isso **não é tratado como falha**: a extensão cai
-silenciosamente no mesmo fluxo manual de sempre (como se a opção estivesse desligada), deixando a
-resolução a cargo do usuário. Sucesso é o captcha ter sido resolvido — por IA ou manualmente pelo
-usuário — não uma questão de qual das duas formas resolveu; só conta como falha de fato quando nem a IA
-nem o usuário conseguem (mesmas condições de timeout do fluxo manual). Cada tentativa da IA que realmente
-produziu uma resposta (acertou ou não, verificado observando se um resultado real apareceu depois do
-envio) é registrada via `POST /api/captcha/feedback` na `certflow-api` — isso é só um log para revisão
-humana futura (nem o Gemini via API nem o Nano local têm algum mecanismo de aprendizado a partir de uma
-chamada individual; não existe ajuste fino em tempo real), no mesmo espírito do log de diagnóstico que já
-alimenta as sugestões de seletor.
+captcha com IA..."), já que a chamada pode levar alguns segundos, e ao final um aviso curto (alguns
+segundos, some sozinho) dizendo se a leitura deu certo (com o texto lido) ou não — nunca trava nada, é só
+informativo. Se **nenhuma** das duas fontes conseguir ler o captcha com confiança — imagem ilegível, Nano
+indisponível, API própria fora do ar, ou o Gemini recusando por falta de créditos/cota — isso **não é
+tratado como falha**: a extensão cai silenciosamente no mesmo fluxo manual de sempre (como se a opção
+estivesse desligada), deixando a resolução a cargo do usuário. Sucesso é o captcha ter sido resolvido —
+por IA ou manualmente pelo usuário — não uma questão de qual das duas formas resolveu; só conta como falha
+de fato quando nem a IA nem o usuário conseguem (mesmas condições de timeout do fluxo manual). Cada
+tentativa da IA que realmente produziu uma resposta (acertou ou não, verificado observando se um resultado
+real apareceu depois do envio) é registrada via `POST /api/captcha/feedback` na `certflow-api` — isso é só
+um log para revisão humana futura (nem o Gemini via API nem o Nano local têm algum mecanismo de
+aprendizado a partir de uma chamada individual; não existe ajuste fino em tempo real), no mesmo espírito
+do log de diagnóstico que já alimenta as sugestões de seletor.
+
+Independente da opção acima estar ligada, um botão "CertFlow: tentar ler captcha com IA" aparece no
+canto da tela sempre que o CNDT está esperando a resolução manual do captcha — dá pra pedir uma leitura
+por IA na hora (ou tentar de novo, se uma tentativa automática já tiver falhado), com o mesmo aviso
+visível de sucesso/falha. Diferente da opção automática, esse botão **nunca clica em "Emitir Certidão"
+sozinho** — só preenche o campo de resposta quando consegue; o clique continua sendo sempre uma ação do
+usuário por esse caminho.
 
 Automatizar essa etapa significa contornar uma barreira que o TST provavelmente usa contra robôs —
 considere se isso está dentro do uso aceitável do serviço antes de ligar a opção. Também nunca escolhe

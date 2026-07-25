@@ -1355,7 +1355,21 @@
 
     let hideOverlay = null;
     try {
-      const img = resolveElement('captchaImage', siteKey, selectorOverrides, () => findCaptchaImageHeuristic(siteKey));
+      /* Erro real confirmado por um usuário: o Gemini recusou a imagem com
+         "Unsupported MIME type: text/html" — o fetch() de img.src trouxe a
+         PRÓPRIA PÁGINA HTML, não uma imagem. Causa clássica: um <img
+         src=""> (vazio, antes do JS do site preencher com o data: URI de
+         verdade) faz a propriedade .src resolver para location.href, não
+         para uma string vazia — então pegávamos o elemento certo cedo
+         demais, antes da imagem real carregar. Espera até achar um <img>
+         com src que não seja a própria página, em vez de checar uma vez só. */
+      const img = await waitFor(
+        () => {
+          const candidate = resolveElement('captchaImage', siteKey, selectorOverrides, () => findCaptchaImageHeuristic(siteKey));
+          return candidate && candidate.src && candidate.src !== location.href ? candidate : null;
+        },
+        { timeout: 8000, interval: 300 }
+      );
       const answerSelector = POST_FILL_FOCUS_SELECTOR[siteKey];
       const answerField = answerSelector && document.querySelector(answerSelector);
       if (!img || !answerField) {
@@ -1387,6 +1401,14 @@
         try {
           const blob = await imageElementToBlob(img);
           if (!blob) throw new Error('Não foi possível obter os bytes da imagem do captcha.');
+          /* Confere o mime ANTES de gastar uma chamada à API — se img.src
+             ainda resolver pra algo que não é imagem de verdade (ex.: a
+             própria página HTML), o Gemini recusa com um erro genérico de
+             "Unsupported MIME type"; falhar aqui já dá um motivo claro no
+             log em vez de depender da mensagem de erro da API externa. */
+          if (!blob.type || !blob.type.startsWith('image/')) {
+            throw new Error(`Conteúdo obtido não é uma imagem (mime: "${blob.type || 'desconhecido'}").`);
+          }
           const { base64, mime } = await blobToBase64(blob);
           const response = await browser.runtime.sendMessage({ type: 'SOLVE_CAPTCHA', siteKey, imageBase64: base64, mime });
           if (response && response.ok && response.texto && response.confidence !== 'low') {

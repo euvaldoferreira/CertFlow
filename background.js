@@ -13,7 +13,7 @@ if (IS_SERVICE_WORKER) {
 }
 
 const NOTIFICATION_ICON = IS_SERVICE_WORKER ? 'icons/chrome/icon-128.png' : 'icons/icon.svg';
-const UNAVAILABLE_RETRY_DELAY_MS = 90 * 1000;
+const UNAVAILABLE_RETRY_DELAY_MS = 30 * 1000;
 const UNAVAILABLE_MAX_RETRIES = 3;
 
 /* mode "auto": a extensão preenche CNPJ e opera o site sozinha.

@@ -297,7 +297,17 @@
      é sempre texto simples da página, nunca um item de menu clicável. */
   function detectionText() {
     const clone = document.body.cloneNode(true);
-    clone.querySelectorAll('header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"], a').forEach((el) => el.remove());
+    /* script/style/noscript nunca deveriam aparecer em texto visível — mas
+       o clone é um nó DESANEXADO do documento, e .innerText (que respeita
+       display:none) pode não funcionar corretamente em nós desanexados
+       em alguns navegadores, caindo no fallback .textContent, que NÃO
+       respeita CSS/rendering e inclui o conteúdo de <script> igual a
+       qualquer outro texto. Bug real confirmado por um usuário: o texto
+       capturado como "temporariamente indisponível" era na verdade
+       código JavaScript da própria página ($('#GerarPDF').click(...)),
+       fazendo a extensão achar que o site estava fora do ar quando na
+       verdade o resultado (botão "Gerar PDF") já estava disponível. */
+    clone.querySelectorAll('header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"], a, script, style, noscript').forEach((el) => el.remove());
     return clone.innerText || clone.textContent || '';
   }
 

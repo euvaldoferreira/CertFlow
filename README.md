@@ -218,7 +218,16 @@ reporte para eu calibrar.
 indisponível. Tente novamente em alguns minutos."* — isso não é captcha nem o resultado da consulta, é
 uma falha passageira do site. O CertFlow reconhece esse tipo de mensagem (por texto e, no Chrome,
 também via IA — veja abaixo) e **tenta de novo sozinho**: recarrega a aba e reenvia o CNPJ até 3 vezes,
-esperando 90 segundos entre as tentativas, antes de desistir e avisar no log.
+esperando 30 segundos entre as tentativas, antes de desistir e avisar no log.
+
+Essa detecção de texto (aqui e em outras partes do fluxo) lê a página através de uma cópia **desanexada**
+do `<body>` (pra poder remover cabeçalho/navegação/rodapé/links antes de procurar o texto, sem alterar a
+página de verdade) — mas em nós desanexados, `.innerText` (que respeita CSS/visibilidade) pode falhar
+silenciosamente e cair num fallback (`.textContent`) que NÃO filtra `<script>`/`<style>`. Isso causou um
+bug real: numa página do Simples Nacional, o texto capturado como "indisponível" era na verdade **código
+JavaScript** da própria página, fazendo a extensão achar que o site estava fora do ar quando o resultado
+(um botão "Gerar PDF") já estava disponível. Corrigido removendo também `script`/`style`/`noscript` dessa
+cópia antes de extrair o texto.
 
 ## Interpretação por IA (Gemini Nano, só no Chrome)
 

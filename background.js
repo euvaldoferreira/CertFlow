@@ -463,8 +463,11 @@ async function hasNativeDownloadForSite(siteKey, sinceMs) {
    gerar o PDF (confirmado por um usuário: aconteceu bem depois do clique),
    o download nativo ainda nem começou quando checamos, e a extensão cai no
    fallback errado (imprimir a tela) momentos antes do download real
-   começar. Insiste por alguns segundos antes de desistir. */
-async function waitForNativeDownload(siteKey, sinceMs, { timeout = 10000, interval = 1000 } = {}) {
+   começar. Insiste por alguns segundos antes de desistir — mas não tempo
+   demais: quando REALMENTE não vai ter download nativo nenhum (precisa
+   mesmo do diálogo manual), esses segundos só atrasam à toa (reportado
+   por um usuário como "um pouco demorado"). 5s é um meio-termo. */
+async function waitForNativeDownload(siteKey, sinceMs, { timeout = 5000, interval = 1000 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     if (await hasNativeDownloadForSite(siteKey, sinceMs)) return true;

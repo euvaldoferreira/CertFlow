@@ -1245,12 +1245,16 @@
         }
       }
 
-      /* Espera um pouco pelo widget do captcha renderizar (alguns carregam
-         de forma assíncrona, um instante depois do resto da página) antes
-         de decidir se ele já está presente. */
-      const captchaAlreadyPresent =
-        SUBMIT_REQUIRES_CAPTCHA_FIRST.has(siteKey) &&
-        (await waitFor(() => detectCaptcha().present || null, { timeout: 5000, interval: 300 }));
+      /* Não dá pra confiar em detectCaptcha() aqui: ela só reconhece captchas
+         de terceiros (reCAPTCHA/hCaptcha), por iframe ou nome de classe. O
+         captcha próprio do CNDT (imagem/áudio + campo de resposta em
+         #idCampoResposta, estilo jcaptcha) não bate com nenhum desses
+         padrões — dependendo dela, a extensão nunca "via" o captcha e clicava
+         sozinha no botão de emitir antes do usuário resolvê-lo (confirmado
+         por um usuário). Para os sites desta lista já sabemos, observando o
+         site ao vivo, que SEMPRE há um captcha nesta etapa — não precisa
+         detectar, só assumir e esperar o usuário resolver e enviar. */
+      const captchaAlreadyPresent = SUBMIT_REQUIRES_CAPTCHA_FIRST.has(siteKey);
 
       if (captchaAlreadyPresent) {
         recordDebug(siteKey, 'captcha_before_submit', 'Captcha detectado antes do envio — aguardando o usuário resolver e clicar em emitir/consultar manualmente.');

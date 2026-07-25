@@ -180,10 +180,14 @@ tinha uma corrida de leitura-e-escrita que podia perder um evento quando dois `r
 em sequência rápida — as escritas em `debugLog` agora são serializadas numa fila.
 
 **CNDT (TST)**: diferente dos outros sites, aqui o captcha precisa ser resolvido **antes** de clicar em
-"Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, se um captcha já estiver
-visível logo depois de preencher o CNPJ, a extensão não clica em nada: só avisa (a mesma notificação de
-"resolva o captcha") e espera você mesmo resolver e clicar em "Emitir Certidão", monitorando o resultado
-em segundo plano a partir daí.
+"Emitir Certidão", não depois — clicar cedo demais não funciona. Por isso, depois de preencher o CNPJ, a
+extensão não clica em nada nesse site: só avisa (a mesma notificação de "resolva o captcha") e espera você
+mesmo resolver e clicar em "Emitir Certidão", monitorando o resultado em segundo plano a partir daí. Isso é
+assumido sempre para o CNDT, sem tentar detectar o captcha no DOM antes: a detecção genérica de captcha só
+reconhece reCAPTCHA/hCaptcha (por iframe ou nome de classe), e o captcha próprio do CNDT (imagem/áudio +
+campo de resposta em `#idCampoResposta`, estilo jcaptcha) não bate com esse padrão — depender da detecção
+fazia a extensão nunca "ver" o captcha e clicar em "Emitir Certidão" sozinha, sem dar chance de resolvê-lo
+(bug real reportado por um usuário).
 
 Normalmente gera o PDF na hora, logo depois do captcha, do mesmo jeito que RFB e Caixa — mas esse site
 também pode responder que a certidão foi **enviada por e-mail** em vez de mostrar um link de download. A

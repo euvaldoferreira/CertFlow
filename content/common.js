@@ -1269,6 +1269,30 @@
     }
   }
 
+  /* Erro real confirmado por um usuário no Firefox: "Permission denied to
+     access property 'constructor'" — a conversão manual de ArrayBuffer
+     pra string binária via String.fromCharCode.apply(null, bytes) (usada
+     em fetchAsBase64, pensada pra PDFs) esbarra num wrapper de segurança
+     do Firefox quando o array de bytes vem de um fetch() de imagem feito
+     dentro do content script. FileReader.readAsDataURL() é o jeito nativo
+     e seguro do navegador de converter um Blob em base64, sem passar por
+     essa conversão manual — evita o problema por completo. */
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = String(reader.result || '');
+        const commaIndex = dataUrl.indexOf(',');
+        resolve({
+          base64: commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : '',
+          mime: blob.type || 'application/octet-stream',
+        });
+      };
+      reader.onerror = () => reject(reader.error || new Error('Falha ao ler a imagem do captcha.'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
   /* Indicador visual (banner fixo no topo da página + spinner girando)
      enquanto a extensão espera a IA (Nano local ou Gemini na nuvem)
      tentar ler o captcha — essa chamada pode levar alguns segundos, e sem
@@ -1361,7 +1385,9 @@
 
       if (!texto) {
         try {
-          const { base64, mime } = await fetchAsBase64(img.src);
+          const blob = await imageElementToBlob(img);
+          if (!blob) throw new Error('Não foi possível obter os bytes da imagem do captcha.');
+          const { base64, mime } = await blobToBase64(blob);
           const response = await browser.runtime.sendMessage({ type: 'SOLVE_CAPTCHA', siteKey, imageBase64: base64, mime });
           if (response && response.ok && response.texto && response.confidence !== 'low') {
             texto = response.texto;

@@ -338,73 +338,200 @@ async function applyAiSuggestion(siteKey, record) {
   if (changed) await browser.storage.local.set({ selectorOverrides, aiAppliedOverrides, extraStepOverrides });
 }
 
-/* Busca a última sugestão já calculada pela API (rápido, sem chamar a IA de
-   novo) — chamado antes de abrir cada site num run normal. */
-async function checkAiSuggestion(siteKey) {
-  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
-  if (!apiUrl || !apiKey) return;
-  try {
-    const response = await fetch(`${deriveApiBase(apiUrl)}/api/suggestions/${siteKey}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!response.ok) return;
-    await applyAiSuggestion(siteKey, await response.json());
-  } catch (err) {
-    /* silencioso: nunca deve travar o fluxo de emissão por causa disso */
-  }
+/* Autenticação com a certflow-api: nunca existe um segredo estático fixo
+   no código ou nas configurações da extensão — o usuário loga (usuário +
+   senha, só nesse momento a senha trafega) e recebe um PAR de tokens:
+   - accessToken: JWT de curta duração (20min), guardado em
+     storage.session (existe só enquanto o navegador está aberto — nunca
+     escrito em disco de forma persistente pela própria API de storage).
+   - refreshToken: opaco, validade de dias, guardado em storage.local
+     (precisa sobreviver a reiniciar o navegador). É revogável no
+     servidor e rotacionado a cada uso (ver refreshTokenStore na API) —
+     bem diferente de uma chave estática que, se vazasse, valeria pra
+     sempre.
+   Todo o resto do código (sugestão de seletores, captcha por IA, envio
+   de log) passa a chamar callCertflowApi(), que cuida de anexar o
+   accessToken válido (renovando via refreshToken quando necessário) —
+   nenhuma outra função precisa saber como a autenticação funciona. */
+const ACCESS_TOKEN_REFRESH_MARGIN_MS = 30 * 1000;
+
+async function getStoredTokens() {
+  const [sessionData, localData] = await Promise.all([
+    browser.storage.session.get(['accessToken', 'accessTokenExpiresAt']),
+    browser.storage.local.get(['refreshToken', 'refreshTokenExpiresAt', 'apiUsername']),
+  ]);
+  return { ...sessionData, ...localData };
 }
 
-/* Pede uma análise nova (chama a IA agora) — usado pelo botão manual nas
-   Configurações, não roda automaticamente a cada execução. */
-async function requestFreshAnalysis(siteKey) {
-  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
-  if (!apiUrl || !apiKey) return { ok: false, error: 'Configure a URL e a chave da API primeiro.' };
+async function storeTokensFromAuthResponse(username, body) {
+  const now = Date.now();
+  await Promise.all([
+    browser.storage.session.set({
+      accessToken: body.accessToken,
+      accessTokenExpiresAt: now + body.accessTokenExpiresIn * 1000,
+    }),
+    browser.storage.local.set({
+      refreshToken: body.refreshToken,
+      refreshTokenExpiresAt: now + body.refreshTokenExpiresIn * 1000,
+      apiUsername: username,
+    }),
+  ]);
+}
+
+async function clearStoredTokens() {
+  await Promise.all([
+    browser.storage.session.remove(['accessToken', 'accessTokenExpiresAt']),
+    browser.storage.local.remove(['refreshToken', 'refreshTokenExpiresAt', 'apiUsername']),
+  ]);
+}
+
+async function apiLogin(username, password) {
+  const { apiUrl } = await browser.storage.local.get('apiUrl');
+  if (!apiUrl) return { ok: false, error: 'Configure a URL da API primeiro.' };
   try {
-    const response = await fetch(`${deriveApiBase(apiUrl)}/api/analyze`, {
+    const response = await fetch(`${deriveApiBase(apiUrl)}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ siteKey }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
     const body = await response.json();
     if (!response.ok) return { ok: false, error: body.error || `HTTP ${response.status}` };
-    await applyAiSuggestion(siteKey, body);
-    return { ok: true, record: body };
+    await storeTokensFromAuthResponse(username, body);
+    return { ok: true, username };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
 }
 
+async function apiLogout() {
+  const { refreshToken } = await getStoredTokens();
+  await clearStoredTokens();
+  if (!refreshToken) return { ok: true };
+  const { apiUrl } = await browser.storage.local.get('apiUrl');
+  if (!apiUrl) return { ok: true };
+  try {
+    await fetch(`${deriveApiBase(apiUrl)}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+  } catch (err) {
+    /* Sessão local já foi limpa acima — revogar no servidor é best-effort,
+       nunca deve impedir o "logout" do ponto de vista do usuário. */
+  }
+  return { ok: true };
+}
+
+/* Troca o refresh token por um par novo (rotação: o refresh token antigo
+   já sai revogado no servidor). Se o refresh também falhar (expirado,
+   revogado, ou já foi usado por outra aba/instância), limpa tudo — a
+   sessão acabou, o usuário precisa logar de novo pela tela de
+   Configurações. */
+async function refreshAccessToken() {
+  const { refreshToken } = await getStoredTokens();
+  if (!refreshToken) return null;
+  const { apiUrl, apiUsername } = await browser.storage.local.get(['apiUrl', 'apiUsername']);
+  if (!apiUrl) return null;
+  try {
+    const response = await fetch(`${deriveApiBase(apiUrl)}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!response.ok) {
+      await clearStoredTokens();
+      return null;
+    }
+    const body = await response.json();
+    await storeTokensFromAuthResponse(apiUsername, body);
+    return body.accessToken;
+  } catch (err) {
+    return null;
+  }
+}
+
+/* Garante um accessToken utilizável: se o guardado ainda não expirou (com
+   uma margem de segurança), reaproveita; senão tenta renovar via refresh
+   token. Retorna null se não há sessão (usuário nunca logou ou a sessão
+   expirou de vez) — quem chama trata isso como "não autenticado", nunca
+   como erro de rede. */
+async function ensureAccessToken() {
+  const { accessToken, accessTokenExpiresAt } = await getStoredTokens();
+  if (accessToken && accessTokenExpiresAt && accessTokenExpiresAt - ACCESS_TOKEN_REFRESH_MARGIN_MS > Date.now()) {
+    return accessToken;
+  }
+  return refreshAccessToken();
+}
+
+/* Único lugar que fala HTTP com a certflow-api pra tudo que exige login —
+   sugestão de seletores, captcha por IA, envio de log. Cuida de anexar o
+   accessToken (renovando sozinho quando necessário) e, se mesmo assim a
+   API responder 401 (token invalidado entre a checagem e a chamada, ou
+   relógio dessincronizado), tenta renovar e repetir UMA vez antes de
+   desistir. */
+async function callCertflowApi(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
+  const { apiUrl } = await browser.storage.local.get('apiUrl');
+  if (!apiUrl) return { ok: false, error: 'Configure a URL da API primeiro (Configurações).', code: 'not_configured' };
+
+  async function attempt(accessToken) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${deriveApiBase(apiUrl)}${path}`, {
+        method,
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      return response;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  let accessToken = await ensureAccessToken();
+  if (!accessToken) return { ok: false, error: 'Não autenticado — faça login em Configurações.', code: 'not_authenticated' };
+
+  try {
+    let response = await attempt(accessToken);
+    if (response.status === 401) {
+      accessToken = await refreshAccessToken();
+      if (!accessToken) return { ok: false, error: 'Sessão expirada — faça login novamente.', code: 'not_authenticated' };
+      response = await attempt(accessToken);
+    }
+    const responseBody = await response.json().catch(() => ({}));
+    if (!response.ok) return { ok: false, error: responseBody.error || `HTTP ${response.status}` };
+    return { ok: true, ...responseBody };
+  } catch (err) {
+    const message = err && err.name === 'AbortError' ? 'Tempo esgotado consultando a API.' : String(err && err.message ? err.message : err);
+    return { ok: false, error: message };
+  }
+}
+
+/* Busca a última sugestão já calculada pela API (rápido, sem chamar a IA de
+   novo) — chamado antes de abrir cada site num run normal. */
+async function checkAiSuggestion(siteKey) {
+  const result = await callCertflowApi(`/api/suggestions/${siteKey}`);
+  if (result.ok) await applyAiSuggestion(siteKey, result);
+}
+
+/* Pede uma análise nova (chama a IA agora) — usado pelo botão manual nas
+   Configurações, não roda automaticamente a cada execução. */
+async function requestFreshAnalysis(siteKey) {
+  const result = await callCertflowApi('/api/analyze', { method: 'POST', body: { siteKey } });
+  if (result.ok) await applyAiSuggestion(siteKey, result);
+  return result.ok ? { ok: true, record: result } : result;
+}
+
 /* Pede à certflow-api pra ler o texto de uma imagem de captcha via Gemini
    (nuvem) — fallback do Gemini Nano on-device, usado quando o Nano não
    está disponível (ex.: Firefox, ou Chrome sem o modelo baixado) ou não
-   conseguiu ler. AbortController com timeout: sem isso, uma chamada presa
-   (rede lenta, API travada) deixaria o content script esperando pra
-   sempre em vez de cair no fluxo manual depois de alguns segundos. */
+   conseguiu ler. */
 async function requestCaptchaSolve(siteKey, imageBase64, mime) {
-  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
-  if (!apiUrl || !apiKey) return { ok: false, error: 'Configure a URL e a chave da API primeiro (Configurações).' };
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(`${deriveApiBase(apiUrl)}/api/captcha/solve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ siteKey, imageBase64, mime }),
-      signal: controller.signal,
-    });
-    const body = await response.json();
-    /* Cobre tanto uma falha de infraestrutura (API própria fora do ar)
-       quanto o Gemini recusando por falta de créditos/cota — em ambos os
-       casos a resposta não é 2xx e isso já é tratado como "não deu pra
-       resolver", nunca propagado como exceção. */
-    if (!response.ok) return { ok: false, error: body.error || `HTTP ${response.status}` };
-    return { ok: true, texto: body.texto, confidence: body.confidence };
-  } catch (err) {
-    const message = err && err.name === 'AbortError' ? 'Tempo esgotado consultando a IA.' : String(err && err.message ? err.message : err);
-    return { ok: false, error: message };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return callCertflowApi('/api/captcha/solve', { method: 'POST', body: { siteKey, imageBase64, mime } });
 }
 
 /* Só um registro pra revisão humana (nem o Gemini via API, nem o Nano
@@ -415,17 +542,7 @@ async function requestCaptchaSolve(siteKey, imageBase64, mime) {
    alimenta as sugestões de seletor. Fogo-e-esquece: nunca deve atrasar
    nem falhar a execução por causa disso. */
 async function sendCaptchaFeedback(siteKey, texto, success) {
-  const { apiUrl, apiKey } = await browser.storage.local.get(['apiUrl', 'apiKey']);
-  if (!apiUrl || !apiKey) return;
-  try {
-    await fetch(`${deriveApiBase(apiUrl)}/api/captcha/feedback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ siteKey, texto, success }),
-    });
-  } catch (err) {
-    /* silencioso: é só telemetria pra revisão futura, nunca deve afetar o run */
-  }
+  await callCertflowApi('/api/captcha/feedback', { method: 'POST', body: { siteKey, texto, success } });
 }
 
 /* Restaura runs a partir do storage se o service worker (Chrome MV3) foi
@@ -615,22 +732,15 @@ try {
 }
 
 async function sendLogToApi(events, source) {
-  const { apiUrl, apiKey, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiKey', 'apiAutoSend']);
-  if (!apiAutoSend || !apiUrl || !apiKey) return;
+  const { apiAutoSend } = await browser.storage.local.get('apiAutoSend');
+  if (!apiAutoSend) return;
 
-  try {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ source: source || 'certflow-extension', events }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    await browser.storage.local.set({ apiStatus: { ok: true, at: Date.now(), message: 'Envio ok.' } });
-  } catch (err) {
-    await browser.storage.local.set({
-      apiStatus: { ok: false, at: Date.now(), message: String(err && err.message ? err.message : err) },
-    });
-  }
+  const result = await callCertflowApi('/api/logs', { method: 'POST', body: { source: source || 'certflow-extension', events } });
+  await browser.storage.local.set({
+    apiStatus: result.ok
+      ? { ok: true, at: Date.now(), message: 'Envio ok.' }
+      : { ok: false, at: Date.now(), message: result.error },
+  });
 }
 
 async function handleCsStatus(msg, sender) {
@@ -834,6 +944,32 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'REQUEST_AI_ANALYSIS': {
         const result = await requestFreshAnalysis(msg.siteKey);
+        sendResponse(result);
+        break;
+      }
+      case 'API_LOGIN': {
+        const result = await apiLogin(msg.username, msg.password);
+        sendResponse(result);
+        break;
+      }
+      case 'API_LOGOUT': {
+        const result = await apiLogout();
+        sendResponse(result);
+        break;
+      }
+      case 'GET_API_AUTH_STATUS': {
+        const { refreshToken, refreshTokenExpiresAt, apiUsername } = await getStoredTokens();
+        sendResponse({
+          authenticated: !!refreshToken && refreshTokenExpiresAt > Date.now(),
+          username: apiUsername || null,
+        });
+        break;
+      }
+      case 'SEND_LOG_NOW': {
+        const result = await callCertflowApi('/api/logs', {
+          method: 'POST',
+          body: { source: 'certflow-extension-manual', events: msg.events },
+        });
         sendResponse(result);
         break;
       }

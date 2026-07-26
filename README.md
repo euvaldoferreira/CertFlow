@@ -388,8 +388,13 @@ HTTP e guarda em disco — útil para acompanhar as execuções sem depender de 
 Na mesma tela de Configurações, em "Envio para API própria":
 
 1. Preencha a **URL da API** (endpoint `POST /api/logs`, ex.: `https://api-certflow.ecolmea.com/api/logs`)
-   e a **chave** (a mesma `API_KEY` definida no `.env` da API).
-2. Clique em "Salvar configuração da API".
+   e clique em "Salvar URL".
+2. Faça **login** com o usuário/senha configurados no servidor (ver [api/README.md](api/README.md)) —
+   a extensão nunca guarda uma chave secreta fixa. O login troca a senha por um par de tokens: um
+   **access token** (JWT, validade de 20 minutos, guardado em `browser.storage.session` — some quando o
+   navegador fecha) e um **refresh token** (validade de dias, guardado em `browser.storage.local`,
+   revogável no servidor). A extensão renova o access token sozinha em segundo plano usando o refresh
+   token; se o refresh também expirar ou for revogado, a tela volta a pedir login.
 3. Marque "Enviar automaticamente a cada evento" para que cada passo do fluxo seja enviado em tempo real
    assim que acontece, ou use "Enviar agora" para mandar o log já registrado localmente de uma vez.
 

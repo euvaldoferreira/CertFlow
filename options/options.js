@@ -158,11 +158,35 @@
   });
 
   async function loadApiConfig() {
-    const { apiUrl, apiKey, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiKey', 'apiAutoSend']);
+    const { apiUrl, apiAutoSend } = await browser.storage.local.get(['apiUrl', 'apiAutoSend']);
     document.getElementById('api-url').value = apiUrl || DEFAULT_API_URL;
-    document.getElementById('api-key').value = apiKey || '';
     document.getElementById('api-auto-send').checked = !!apiAutoSend;
     renderApiStatus();
+    renderApiAuthStatus();
+  }
+
+  /* A extensão nunca guarda uma chave fixa — só consulta o background
+     (dono dos tokens em storage.session/storage.local) pra saber se há
+     uma sessão válida agora, e mostra login OU logout de acordo. */
+  async function renderApiAuthStatus() {
+    const status = await browser.runtime.sendMessage({ type: 'GET_API_AUTH_STATUS' });
+    const el = document.getElementById('api-auth-status');
+    const loginFields = document.getElementById('api-login-fields');
+    const loginBtn = document.getElementById('api-login-btn');
+    const logoutBtn = document.getElementById('api-logout-btn');
+    if (status.authenticated) {
+      el.textContent = `Conectado como "${status.username}".`;
+      el.className = 'tab-hint ok';
+      loginFields.hidden = true;
+      loginBtn.hidden = true;
+      logoutBtn.hidden = false;
+    } else {
+      el.textContent = 'Não conectado — faça login para usar sugestão de seletores, captcha por IA e envio automático de log.';
+      el.className = 'tab-hint';
+      loginFields.hidden = false;
+      loginBtn.hidden = false;
+      logoutBtn.hidden = true;
+    }
   }
 
   async function renderApiStatus() {
@@ -180,12 +204,45 @@
     el.className = `tab-hint ${apiStatus.ok ? 'ok' : 'error'}`;
   }
 
-  document.getElementById('save-api-btn').addEventListener('click', async () => {
+  document.getElementById('save-api-url-btn').addEventListener('click', async () => {
     const apiUrl = document.getElementById('api-url').value.trim() || DEFAULT_API_URL;
-    const apiKey = document.getElementById('api-key').value.trim();
+    await browser.storage.local.set({ apiUrl });
+    alert('URL salva.');
+  });
+
+  document.getElementById('api-login-btn').addEventListener('click', async () => {
+    const username = document.getElementById('api-username').value.trim();
+    const password = document.getElementById('api-password').value;
+    if (!username || !password) {
+      alert('Informe usuário e senha.');
+      return;
+    }
+    const btn = document.getElementById('api-login-btn');
+    btn.disabled = true;
+    btn.textContent = 'Entrando...';
+    try {
+      const result = await browser.runtime.sendMessage({ type: 'API_LOGIN', username, password });
+      if (!result.ok) {
+        alert(`Falha no login: ${result.error}`);
+        return;
+      }
+      document.getElementById('api-password').value = '';
+      await renderApiAuthStatus();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Entrar';
+    }
+  });
+
+  document.getElementById('api-logout-btn').addEventListener('click', async () => {
+    await browser.runtime.sendMessage({ type: 'API_LOGOUT' });
+    await renderApiAuthStatus();
+  });
+
+  document.getElementById('save-api-btn').addEventListener('click', async () => {
     const apiAutoSend = document.getElementById('api-auto-send').checked;
-    await browser.storage.local.set({ apiUrl, apiKey, apiAutoSend });
-    alert('Configuração da API salva.');
+    await browser.storage.local.set({ apiAutoSend });
+    alert('Configuração salva.');
   });
 
   document.getElementById('send-log-now-btn').addEventListener('click', async () => {
@@ -194,24 +251,12 @@
       alert('Ainda não há eventos registrados. Rode uma emissão primeiro.');
       return;
     }
-    const apiUrl = document.getElementById('api-url').value.trim() || DEFAULT_API_URL;
-    const apiKey = document.getElementById('api-key').value.trim();
-    if (!apiKey) {
-      alert('Informe a chave da API antes de enviar (e clique em "Salvar configuração da API").');
+    const result = await browser.runtime.sendMessage({ type: 'SEND_LOG_NOW', events: debugLog });
+    if (!result.ok) {
+      alert(`Falha ao enviar: ${result.error}`);
       return;
     }
-    try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ source: 'certflow-extension-manual', events: debugLog }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      alert(`Log enviado com sucesso (id ${body.id}).`);
-    } catch (err) {
-      alert(`Falha ao enviar: ${err.message || err}`);
-    }
+    alert(`Log enviado com sucesso (id ${result.id}).`);
   });
 
   const AI_FIELD_LABELS = {

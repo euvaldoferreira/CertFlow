@@ -1412,8 +1412,8 @@
      1. Gemini Nano on-device (Chrome, via content/ai.js — só existe nesse
         navegador; em outros, a função global nem existe).
      2. Gemini na nuvem, através da certflow-api própria do usuário (exige
-        apiUrl/apiKey configurados em Configurações) — mesmo caminho já
-        usado para sugestão de seletores.
+        login feito em Configurações) — mesmo caminho já usado para
+        sugestão de seletores.
      As duas fontes podem falhar por motivos fora do nosso controle (Nano
      não baixado ainda, API própria fora do ar, chave do Gemini sem
      créditos/cota estourada, resposta bloqueada por segurança) — qualquer

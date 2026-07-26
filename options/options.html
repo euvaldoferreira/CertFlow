@@ -254,22 +254,45 @@
     <p class="intro">
       Se você roda a <code>certflow-api</code> localmente (ver pasta <code>api/</code> do projeto), a
       extensão pode enviar cada evento do log automaticamente assim que ele acontece — útil para
-      acompanhar em tempo real sem precisar baixar o JSON manualmente.
+      acompanhar em tempo real sem precisar baixar o JSON manualmente. Também é essa configuração que
+      habilita a sugestão de seletores por IA e a leitura de captcha do CNDT.
     </p>
     <div class="field-row">
       <label>URL da API</label>
       <input type="text" id="api-url" placeholder="https://api-certflow.ecolmea.com/api/logs" />
     </div>
-    <div class="field-row">
-      <label>Chave (API key)</label>
-      <input type="password" id="api-key" placeholder="Bearer token configurado no servidor" />
+    <div class="actions-row">
+      <button id="save-api-url-btn" type="button">Salvar URL</button>
     </div>
+
+    <p class="intro">
+      A extensão nunca guarda uma chave secreta fixa — você faz login com usuário e senha (configurados
+      no servidor, ver <code>api/.env.example</code>) e recebe um token de acesso de curta duração
+      (renovado sozinho em segundo plano) mais um token de renovação revogável, válido por alguns dias.
+      A senha só trafega no momento do login; depois disso, só os tokens são usados.
+    </p>
+    <p id="api-auth-status" class="tab-hint">Verificando sessão...</p>
+    <div id="api-login-fields">
+      <div class="field-row">
+        <label>Usuário</label>
+        <input type="text" id="api-username" autocomplete="username" />
+      </div>
+      <div class="field-row">
+        <label>Senha</label>
+        <input type="password" id="api-password" autocomplete="current-password" />
+      </div>
+    </div>
+    <div class="actions-row">
+      <button id="api-login-btn" type="button">Entrar</button>
+      <button id="api-logout-btn" type="button" hidden>Sair</button>
+    </div>
+
     <div class="field-row checkbox-row">
       <label for="api-auto-send">Enviar automaticamente a cada evento</label>
       <input type="checkbox" id="api-auto-send" />
     </div>
     <div class="actions-row">
-      <button id="save-api-btn" type="button">Salvar configuração da API</button>
+      <button id="save-api-btn" type="button">Salvar</button>
     </div>
     <p id="api-status" class="tab-hint"></p>
   </section>

@@ -117,8 +117,8 @@ th { color: var(--muted); font-weight: 600; }
 .checkbox-row { grid-template-columns: 1fr auto; }
 .checkbox-row input[type="checkbox"] { width: 16px; height: 16px; justify-self: end; }
 
-#api-status.ok { color: var(--green-light); }
-#api-status.error { color: #c0392b; }
+#api-status.ok, #api-auth-status.ok { color: var(--green-light); }
+#api-status.error, #api-auth-status.error { color: #c0392b; }
 
 .ai-site-block {
   border-top: 1px solid var(--border);
